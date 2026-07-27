@@ -1,9 +1,9 @@
 import os
 import numpy as np
 from typing import Dict, Any
-from dataclasses import dataclass
 
 from autoquantum.visualization.plot import PESPlotter, DynamicsPlotter, WavePacketPlotter
+from autoquantum.visualization.contour import PESContourPlotter, ReactionPathPlotter
 
 
 class DashboardGenerator:
@@ -11,12 +11,16 @@ class DashboardGenerator:
         self.results = results
         self.config = config
         self.output_dir = config.output_dir
+        self.dim = results.get("dynamics_dim", "1d")
 
     def generate_all(self):
         os.makedirs(self.output_dir, exist_ok=True)
 
-        self._plot_pes()
-        self._plot_nn_fit()
+        if self.dim == "2d":
+            self._plot_pes_2d()
+        else:
+            self._plot_pes()
+            self._plot_nn_fit()
         self._plot_dynamics()
         self._generate_html_report()
 
@@ -39,11 +43,31 @@ class DashboardGenerator:
                 save_path=os.path.join(self.output_dir, "pes_nn_fit.png"),
             )
 
+    def _plot_pes_2d(self):
+        builder = self.results.get("pes_2d")
+        if builder is not None:
+            R_grid, r_grid, V_grid = builder.generate_grid(
+                R_range=(0.5, 6.0), r_range=(0.5, 6.0),
+                n_R=150, n_r=150,
+            )
+            PESContourPlotter.plot_contour(
+                R_grid, r_grid, V_grid,
+                save_path=os.path.join(self.output_dir, "pes_contour.png"),
+                title=f"{self.config.system_name} PES",
+            )
+            min_path = np.min(V_grid, axis=1)
+            ReactionPathPlotter.plot_reaction_profile(
+                R_grid, min_path,
+                save_path=os.path.join(self.output_dir, "reaction_profile.png"),
+            )
+
     def _plot_dynamics(self):
         result = self.results.get("dynamics_result")
         if result is not None:
+            label = "Reaction Probability" if self.dim == "2d" else None
             DynamicsPlotter.plot_transmission(
-                result.energy, result.transmission, result.reflection,
+                result.energy, result.transmission,
+                getattr(result, "reflection", None),
                 save_path=os.path.join(self.output_dir, "transmission.png"),
             )
 
@@ -69,23 +93,25 @@ class DashboardGenerator:
             "<h2>System Parameters</h2>",
             f"<div class='stat'><div class='stat-value'>{self.config.mass}</div><div class='stat-label'>Mass (au)</div></div>",
             f"<div class='stat'><div class='stat-value'>{self.config.pes_type}</div><div class='stat-label'>PES Type</div></div>",
-            f"<div class='stat'><div class='stat-value'>{self.config.n_pes_points}</div><div class='stat-label'>PES Points</div></div>",
+            f"<div class='stat'><div class='stat-value'>{self.dim.upper()}</div><div class='stat-label'>Dimension</div></div>",
         ]
 
         if result is not None:
             lines.extend([
                 "<h2>Dynamics Results</h2>",
                 f"<div class='stat'><div class='stat-value'>{result.energy[0]:.4f} - {result.energy[-1]:.4f}</div><div class='stat-label'>Energy Range (au)</div></div>",
-                f"<div class='stat'><div class='stat-value'>{result.transmission.max():.3f}</div><div class='stat-label'>Max Transmission</div></div>",
-                f"<div class='stat'><div class='stat-value'>{result.reflection.min():.3f}</div><div class='stat-label'>Min Reflection</div></div>",
+                f"<div class='stat'><div class='stat-value'>{result.transmission.max():.3f}</div><div class='stat-label'>Max Reaction Prob</div></div>",
             ])
 
         img_dir = self.output_dir
-        imgs = ["pes_original.png", "pes_nn_fit.png", "transmission.png"]
-        for img in imgs:
+        candidates = ["pes_original.png", "pes_nn_fit.png",
+                       "pes_contour.png", "reaction_profile.png",
+                       "transmission.png"]
+        for img in candidates:
             path = os.path.join(img_dir, img)
             if os.path.exists(path):
-                lines.append(f"<h2>{img.replace('.png','').replace('_',' ').title()}</h2>")
+                name = img.replace(".png", "").replace("_", " ").title()
+                lines.append(f"<h2>{name}</h2>")
                 lines.append(f"<img src='{img}' alt='{img}'>")
 
         lines.extend([

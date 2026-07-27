@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="autoquantum",
-    version="0.1.0",
+    version="0.2.0",
     description="分子反应动力学全维量子动力学自动实现平台",
     author="AutoQuantum Team",
     packages=find_packages(),
@@ -12,4 +12,9 @@ setup(
         "scipy>=1.7.0",
     ],
     python_requires=">=3.8",
+    entry_points={
+        "console_scripts": [
+            "autoquantum=autoquantum.cli:main",
+        ],
+    },
 )

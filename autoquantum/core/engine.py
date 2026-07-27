@@ -5,8 +5,9 @@ from dataclasses import dataclass, field
 
 from autoquantum.pes import PESBuilder
 from autoquantum.nn import NNTrainer, TrainingConfig, FeedForwardNN
-from autoquantum.dynamics import QuantumScattering1D
+from autoquantum.dynamics import QuantumScattering1D, QuantumReaction2D
 from autoquantum.visualization import DashboardGenerator
+from autoquantum.pes.leps import LEPSBuilder
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
@@ -113,6 +114,20 @@ class AutoPipeline:
         logger.info("[3/4] Quantum Dynamics Calculation ...")
         t0 = time.time()
 
+        system = self.config.system_name.lower()
+
+        if "h3" in system or "leps" in self.config.pes_type:
+            self._step_dynamics_2d()
+        else:
+            self._step_dynamics_1d()
+
+        t1 = time.time()
+        logger.info(f"    Dynamics completed in {t1 - t0:.3f}s")
+        if "dynamics_result" in self._results:
+            r = self._results["dynamics_result"]
+            logger.info(f"    Max reaction probability: {r.transmission.max():.4f}")
+
+    def _step_dynamics_1d(self):
         model = self._results.get("nn_model")
         builder = self._results["pes_builder"]
         pes = model if model is not None else builder
@@ -129,11 +144,26 @@ class AutoPipeline:
             energy_max=self.config.energy_max,
             n_points=self.config.n_energy_points,
         )
-        t1 = time.time()
-        logger.info(f"    Dynamics completed in {t1 - t0:.3f}s")
-        logger.info(f"    Max transmission: {result.transmission.max():.4f}")
-
         self._results["dynamics_result"] = result
+        self._results["dynamics_dim"] = "1d"
+
+    def _step_dynamics_2d(self):
+        params = self.config.pes_params
+        builder = LEPSBuilder(params)
+
+        solver = QuantumReaction2D(
+            mass_H=1.0, pes=builder.evaluate_2d,
+            n_R=200, n_r=200,
+            R_range=(0.5, 6.0), r_range=(0.5, 6.0),
+        )
+        result = solver.solve(
+            energy_min=self.config.energy_min,
+            energy_max=self.config.energy_max,
+            n_points=self.config.n_energy_points,
+        )
+        self._results["dynamics_result"] = result
+        self._results["dynamics_dim"] = "2d"
+        self._results["pes_2d"] = builder
 
     def _step_visualize(self):
         logger.info("[4/4] Generating Visualizations ...")
@@ -160,7 +190,9 @@ class AutoPipeline:
         ]
         if "dynamics_result" in self._results:
             r = self._results["dynamics_result"]
+            dim = self._results.get("dynamics_dim", "1d")
+            lines.append(f"Dynamics: {dim.upper()}")
             lines.append(f"Energy range: {r.energy[0]:.4f} - {r.energy[-1]:.4f} au")
-            lines.append(f"Max transmission: {r.transmission.max():.4f}")
+            lines.append(f"Max reaction probability: {r.transmission.max():.4f}")
         lines.append("=" * 60)
         return "\n".join(lines)
