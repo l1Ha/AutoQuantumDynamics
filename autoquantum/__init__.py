@@ -1,0 +1,3 @@
+from autoquantum import core, pes, nn, dynamics, visualization
+
+__version__ = "0.1.0"
