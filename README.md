@@ -1,102 +1,62 @@
 # AutoQuantum
 
-**分子反应动力学全维量子动力学计算自动实现平台**
+分子势能面与量子动力学的 Python 研究原型。项目目标是串联势能面构建、神经网络拟合、动力学计算和可视化；**目前尚未实现或验证完整的从头算到全维反应动力学流程**。
 
-从势能面构建 → 神经网络拟合 → 量子动力学计算 → 结果可视化的全自动流程。
+## v0.3.1：NN 回归修复补丁
 
-## 快速安装
+本版仅修复神经网络回归输出层，并统一软件包版本号。未纳入开发中的二维含时波包、CLI 和动力学重构。详见 [CHANGELOG.md](CHANGELOG.md)。
+
+- 隐藏层保留所选激活函数，输出层改为线性，能量预测不再受 tanh 的 `[-1, 1]` 范围限制。
+- 现有反向传播与线性输出下的半均方误差梯度一致。
+- 增加线性输出、超出激活范围的拟合和有限差分梯度回归测试。
+
+**兼容性提示：**旧模型权重加载后也采用新的线性输出，预测会改变。旧拟合模型必须重新验证，建议重新训练；本版不保证旧模型预测兼容。
+
+## 安装与检查
 
 ```bash
-pip install -r requirements.txt
-pip install -e .
-```
-
-## CLI 使用
-
-```bash
-# 一维 H₂ 散射 (Morse 势)
-autoquantum run -s H2_1D -p morse -o output_h2
-
-# 二次散射
-autoquantum run -s H2_1D -p harmonic -o output_h2_harm
-
-# 二维 H + H₂ 反应 (Eckart 垒)
-autoquantum run -s H3_2D -p eckart -o output_h3
-
-# 查看系统信息
+python -m pip install .
+autoquantum --version
 autoquantum info
+python -m unittest discover -s tests -v
 ```
 
-## 示例
+开发安装可使用 `python -m pip install -e .`。无需为本版的 NumPy 神经网络额外安装 PyTorch；旧 `requirements.txt` 仍包含该多余依赖。
 
-```bash
-# 一维 H₂ Morse 势散射
-python autoquantum/examples/h1d_scattering.py
+## 最小 NN 示例
 
-# 二维 H + H₂ 反应散射 (Eckart 垒 + 最小能量路径)
-python autoquantum/examples/h3_reaction.py
+```python
+import numpy as np
+from autoquantum.nn.model import FeedForwardNN
+
+x = np.linspace(0, 1, 60).reshape(-1, 1)
+y = (3 * x + 1).ravel()
+model = FeedForwardNN([1, 32, 1], activation="tanh", seed=42)
+for _ in range(500):
+    model.train_step(x, y, lr=0.01)
+print("MSE:", np.mean((model.predict(x) - y) ** 2))
 ```
 
-## 项目结构
+## 功能边界与已知限制
 
-```
-AutoQuantum/
-├── autoquantum/
-│   ├── cli.py               # 命令行接口
-│   ├── core/
-│   │   ├── engine.py         # AutoPipeline 自动编排引擎
-│   │   └── base.py           # 基类
-│   ├── pes/
-│   │   ├── analytic.py       # Morse / Harmonic / LJ
-│   │   ├── builder.py        # PES 构建器
-│   │   ├── abinitio.py       # 从头算数据接口
-│   │   ├── leps.py           # LEPS (H+H₂)
-│   │   └── eckart.py         # Eckart 垒 (H+H₂)
-│   ├── nn/
-│   │   ├── model.py          # 前馈神经网络 (纯 NumPy)
-│   │   ├── train.py          # 训练管线
-│   │   └── dataset.py        # 数据集
-│   ├── dynamics/
-│   │   ├── quantum_1d.py     # 1D 量子散射 (Numerov)
-│   │   ├── quantum_2d.py     # 2D 量子反应框架
-│   │   ├── wavepacket.py     # 含时波包 (Split-Operator)
-│   │   └── observables.py    # 可观测量
-│   ├── visualization/
-│   │   ├── plot.py           # 1D 图
-│   │   ├── contour.py        # 2D 等高线 + 3D
-│   │   └── dashboard.py      # HTML 报告
-│   └── examples/
-│       ├── h1d_scattering.py # H₂ 一维散射
-│       └── h3_reaction.py    # H+H₂ 反应散射
-├── knowledge_base/           # 理论文档
-├── tests/                    # 单元测试
-└── setup.py
-```
+| 模块 | 当前状态 |
+|---|---|
+| 解析 PES | 已有 Morse、谐振子、LJ、LEPS、Eckart 代码；不代表真实体系精度已经验证 |
+| 从头算 PES | `AbInitioData` 为数组数据容器；没有 ASE/PySCF 自动计算后端 |
+| NN 拟合 | 基础一维训练流程；本版修复输出层；尚无完整归一化、力训练或多维训练管线 |
+| 一维定态动力学 | 已有原型实现和基础测试，缺少充分的物理基准与收敛验证 |
+| 二维定态动力学 | 现有递推、禁阻区处理和通量提取存在正确性问题，不应用其输出作科学结论 |
+| 二维含时波包 | 开发中，本版不包含 |
+| H3 CLI | 已知 `eckart`/`leps` 进入一维 PES 注册器后可能产生 `KeyError`，暂不推荐使用 |
+| 一维含时波包 | 已知复数初始化错误及 NumPy 2.x `np.trapz` 兼容问题，本补丁未修复 |
 
-## 流程说明
+其他限制：早停未恢复最佳权重；保存格式使用 pickle，仅加载可信模型；历史质量、长度单位与能量零点需由使用者核查。`scripts/sync_github.sh` 仍指向旧仓库并会修改 SSH 配置，**不要运行**；使用常规 git 命令管理远程。
 
-```
-[PES 构建] → [NN 拟合] → [动力学计算] → [可视化]
-```
+测试通过仅指已有测试覆盖，不是对所有 CLI 路径、反应概率、势垒或物理精度的认证。开发分支的 Eckart 基准与 LEPS 诊断不属于本发布的验证证据。
 
-### 支持体系
+## 后续目标
 
-| 体系 | PES | 动力学 | 说明 |
-|------|-----|--------|------|
-| H₂ 1D | Morse | 透射/反射 | 双原子振动散射 |
-| H₂ 1D | Harmonic | 透射/反射 | 谐振近似 |
-| H+H₂ 2D | LEPS | MEP 反应概率 | 三原子反应 |
-| H+H₂ 2D | Eckart | MEP 反应概率 | 简化反应模型 |
-| 任意 1D | NN 拟合 | 透射/反射 | 数据驱动 |
-
-## 路线图
-
-- [x] 一维 H₂ 量子散射 (Morse / Harmonic)
-- [x] 二维 H + H₂ 反应散射 (Eckart / LEPS + MEP)
-- [x] 神经网络 PES 拟合
-- [x] CLI 命令行接口
-- [x] HTML 报告生成
-- [ ] 二维含时波包传播
-- [ ] 四原子以上复杂体系
-- [ ] GPU 加速
-- [ ] ASE/PySCF 自动数据生成
+- 修复并独立验证动力学与 CLI 路径。
+- 建立带单位、数据校验及误差评估的多维 PES 拟合流程。
+- 接入可追溯的电子结构计算后端。
+- 对二维含时传播、入口态和吸收边界开展收敛验证。

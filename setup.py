@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="autoquantum",
-    version="0.2.0",
+    version="0.3.1",
     description="分子反应动力学全维量子动力学自动实现平台",
     author="AutoQuantum Team",
     packages=find_packages(),
