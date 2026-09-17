@@ -49,16 +49,23 @@ class FeedForwardNN:
             raise ValueError(f"Unknown activation: {name}")
 
     def forward(self, X: np.ndarray) -> List[np.ndarray]:
-        X = np.asarray(X)
+        X = np.asarray(X, dtype=float)
         if X.ndim == 1:
             X = X.reshape(-1, 1)
 
         activations = [X]
         zs = []
-        for w, b in zip(self.weights, self.biases):
+        n_layers = len(self.weights)
+        for i, (w, b) in enumerate(zip(self.weights, self.biases)):
             z = activations[-1] @ w + b
             zs.append(z)
-            activations.append(self.activation_fn(z))
+            if i == n_layers - 1:
+                # Linear output layer: PES values are real-valued and may lie
+                # outside the range of bounded activations (e.g. tanh in
+                # [-1, 1]), so the final layer must not be squashed.
+                activations.append(z)
+            else:
+                activations.append(self.activation_fn(z))
 
         return activations, zs
 
