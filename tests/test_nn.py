@@ -86,6 +86,29 @@ class TestNNModel(unittest.TestCase):
                     grad, 0.5 * num_grad, rtol=1e-5, atol=1e-9
                 )
 
+    def test_early_stop_restores_best_weights(self):
+        # 早停后返回的模型必须对应验证损失最低的那一轮, 而非已退化的末轮
+        from autoquantum.nn.train import NNTrainer, TrainingConfig
+
+        rng = np.random.RandomState(11)
+        x = rng.uniform(-1, 1, 80).reshape(-1, 1)
+        y_clean = np.sin(3 * x).flatten()
+        y = y_clean + rng.normal(0, 0.15, x.size)  # 噪声使验证损失先降后升
+        config = TrainingConfig(hidden_layers=[32, 32], epochs=400,
+                                lr=0.005, early_stop_patience=20,
+                                train_split=0.5, seed=1)
+        trainer = NNTrainer(config)
+        model, history = trainer.train(x, y)
+
+        # 与历史最优验证损失一致性: 用同一划分重算
+        n = x.shape[0]
+        idx = np.random.RandomState(config.seed).permutation(n)
+        val_idx = idx[int(n * config.train_split):]
+        val_loss_best = min(history["val_loss"])
+        val_loss_recomputed = np.mean(
+            (model.predict(x[val_idx]) - y[val_idx]) ** 2)
+        self.assertAlmostEqual(val_loss_recomputed, val_loss_best, places=10)
+
 
 if __name__ == "__main__":
     unittest.main()

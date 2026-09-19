@@ -4,6 +4,12 @@ from typing import Dict, Any
 
 from autoquantum.visualization.plot import PESPlotter, DynamicsPlotter, WavePacketPlotter
 from autoquantum.visualization.contour import PESContourPlotter, ReactionPathPlotter
+from autoquantum.visualization.wavepacket2d import WavePacket2DPlotter
+
+try:
+    from autoquantum import __version__ as AQ_VERSION
+except ImportError:  # 包初始化期间的兜底
+    AQ_VERSION = "0.4.0"
 
 
 class DashboardGenerator:
@@ -22,6 +28,7 @@ class DashboardGenerator:
             self._plot_pes()
             self._plot_nn_fit()
         self._plot_dynamics()
+        self._plot_wavepacket()
         self._generate_html_report()
 
     def _plot_pes(self):
@@ -47,7 +54,7 @@ class DashboardGenerator:
         builder = self.results.get("pes_2d")
         if builder is not None:
             R_grid, r_grid, V_grid = builder.generate_grid(
-                R_range=(0.5, 6.0), r_range=(0.5, 6.0),
+                R_range=(0.5, 9.0), r_range=(0.5, 6.0),
                 n_R=150, n_r=150,
             )
             PESContourPlotter.plot_contour(
@@ -64,11 +71,42 @@ class DashboardGenerator:
     def _plot_dynamics(self):
         result = self.results.get("dynamics_result")
         if result is not None:
-            label = "Reaction Probability" if self.dim == "2d" else None
             DynamicsPlotter.plot_transmission(
                 result.energy, result.transmission,
                 getattr(result, "reflection", None),
                 save_path=os.path.join(self.output_dir, "transmission.png"),
+            )
+
+    def _plot_wavepacket(self):
+        if "wavepacket_result" in self.results:
+            wp = self.results["wavepacket_result"]
+            ds_line = self.results.get("wp_ds_line")
+            save_gif = getattr(self.config, "wp_save_gif", True)
+            WavePacket2DPlotter.plot_snapshots(
+                wp,
+                save_path=os.path.join(self.output_dir, "wavepacket_snapshots.png"),
+                n_show=4, ds_line=ds_line,
+            )
+            WavePacket2DPlotter.plot_probabilities(
+                wp,
+                save_path=os.path.join(self.output_dir, "wavepacket_probability.png"),
+            )
+            if save_gif:
+                try:
+                    WavePacket2DPlotter.save_animation(
+                        wp,
+                        save_path=os.path.join(self.output_dir, "wavepacket.gif"),
+                        ds_line=ds_line,
+                    )
+                except Exception as exc:  # GIF 生成失败不阻塞主流程
+                    print(f"  [warn] wavepacket.gif 生成失败: {exc}")
+
+        if "wavepacket_result_1d" in self.results:
+            times, psi_all = self.results["wavepacket_result_1d"]
+            grid = self.results["dynamics_result"].grid
+            WavePacketPlotter.plot_wavepacket_evolution(
+                times, grid, psi_all,
+                save_path=os.path.join(self.output_dir, "wavepacket_1d.png"),
             )
 
     def _generate_html_report(self):
@@ -94,6 +132,7 @@ class DashboardGenerator:
             f"<div class='stat'><div class='stat-value'>{self.config.mass}</div><div class='stat-label'>Mass (au)</div></div>",
             f"<div class='stat'><div class='stat-value'>{self.config.pes_type}</div><div class='stat-label'>PES Type</div></div>",
             f"<div class='stat'><div class='stat-value'>{self.dim.upper()}</div><div class='stat-label'>Dimension</div></div>",
+            f"<div class='stat'><div class='stat-value'>{getattr(self.config, 'method', 'auto')}</div><div class='stat-label'>Method</div></div>",
         ]
 
         if result is not None:
@@ -103,19 +142,27 @@ class DashboardGenerator:
                 f"<div class='stat'><div class='stat-value'>{result.transmission.max():.3f}</div><div class='stat-label'>Max Reaction Prob</div></div>",
             ])
 
+        if "wp_final_reaction" in self.results:
+            lines.append(
+                f"<div class='stat'><div class='stat-value'>{self.results['wp_final_reaction']:.3f}</div>"
+                "<div class='stat-label'>Wavepacket Final P_react</div></div>"
+            )
+
         img_dir = self.output_dir
         candidates = ["pes_original.png", "pes_nn_fit.png",
-                       "pes_contour.png", "reaction_profile.png",
-                       "transmission.png"]
+                      "pes_contour.png", "reaction_profile.png",
+                      "transmission.png",
+                      "wavepacket_snapshots.png", "wavepacket_probability.png",
+                      "wavepacket_1d.png", "wavepacket.gif"]
         for img in candidates:
             path = os.path.join(img_dir, img)
             if os.path.exists(path):
-                name = img.replace(".png", "").replace("_", " ").title()
+                name = img.replace(".png", "").replace(".gif", "").replace("_", " ").title()
                 lines.append(f"<h2>{name}</h2>")
                 lines.append(f"<img src='{img}' alt='{img}'>")
 
         lines.extend([
-            "<footer>Generated by AutoQuantum v0.1.0</footer>",
+            f"<footer>Generated by AutoQuantum v{AQ_VERSION}</footer>",
             "</div></body></html>",
         ])
 

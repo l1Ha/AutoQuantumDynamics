@@ -45,6 +45,7 @@ class NNTrainer:
         )
 
         best_val_loss = float("inf")
+        best_state = None
         patience_counter = 0
 
         for epoch in range(self.config.epochs):
@@ -69,12 +70,18 @@ class NNTrainer:
 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
+                best_state = ([w.copy() for w in model.weights],
+                              [b.copy() for b in model.biases])
                 patience_counter = 0
             else:
                 patience_counter += 1
                 if patience_counter >= self.config.early_stop_patience:
                     print(f"  Early stopping at epoch {epoch}")
                     break
+
+        # 恢复验证损失最低时的权重 (早停/过拟合时避免返回已退化的末轮模型)
+        if best_state is not None:
+            model.weights, model.biases = best_state
 
         pes_nn = PESNN(model)
         return pes_nn, self.history
