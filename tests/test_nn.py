@@ -100,14 +100,81 @@ class TestNNModel(unittest.TestCase):
         trainer = NNTrainer(config)
         model, history = trainer.train(x, y)
 
-        # 与历史最优验证损失一致性: 用同一划分重算
+        # 与历史最优验证损失一致性 (相对改进判据 1e-3 内的容差):
+        # 恢复的权重对应最后一次"有意义改进"的轮次
         n = x.shape[0]
         idx = np.random.RandomState(config.seed).permutation(n)
         val_idx = idx[int(n * config.train_split):]
         val_loss_best = min(history["val_loss"])
         val_loss_recomputed = np.mean(
             (model.predict(x[val_idx]) - y[val_idx]) ** 2)
-        self.assertAlmostEqual(val_loss_recomputed, val_loss_best, places=10)
+        self.assertLessEqual(val_loss_recomputed,
+                             val_loss_best * (1 + 1e-3) + 1e-9)
+
+    def test_multidim_fit(self):
+        # 二维光滑函数拟合 (归一化开启, 输出线性)
+        from autoquantum.nn.train import NNTrainer, TrainingConfig
+
+        def f(x):
+            return np.sin(x[:, 0]) * np.exp(-0.5 * x[:, 1] ** 2) + 0.3 * x[:, 0]
+
+        g1, g2 = np.meshgrid(np.linspace(-2, 2, 41), np.linspace(-2, 2, 41),
+                             indexing="ij")
+        X = np.column_stack([g1.ravel(), g2.ravel()])
+        y = f(X)
+        config = TrainingConfig(hidden_layers=[40, 40], epochs=2000, lr=0.01,
+                                seed=3)
+        model, history = NNTrainer(config).train(X, y)
+        pred = model.predict(X)
+        rmse = np.sqrt(np.mean((pred - y) ** 2))
+        self.assertLess(rmse, 2e-2, f"2D 拟合 RMSE 过大: {rmse:.2e}")
+
+    def test_gradient_matches_finite_difference(self):
+        # 解析输入梯度 vs 中心差分 (含归一化链式修正路径)
+        from autoquantum.nn.train import NNTrainer, TrainingConfig
+
+        rng = np.random.RandomState(5)
+        X = rng.uniform(-1, 1, (60, 2))
+        y = np.sin(2 * X[:, 0]) + 0.5 * X[:, 1] ** 2
+        model, _ = NNTrainer(TrainingConfig(hidden_layers=[24, 24],
+                                            epochs=300, lr=0.01,
+                                            seed=1)).train(X, y)
+
+        pts = rng.uniform(-0.8, 0.8, (12, 2))
+        g = model.gradient(pts)
+        h = 1e-6
+        for j in range(2):
+            ep = np.zeros(2); ep[j] = h
+            num = (model.predict(pts + ep) - model.predict(pts - ep)) / (2 * h)
+            np.testing.assert_allclose(g[:, j], num, rtol=1e-4, atol=1e-6)
+
+    def test_normalization_persistence(self):
+        # 归一化参数随模型保存/加载, 预测逐点一致
+        import tempfile, os
+        from autoquantum.nn.train import NNTrainer, TrainingConfig
+
+        X = np.linspace(-3, 3, 80).reshape(-1, 1)
+        y = 5.0 * X.ravel() + 3.0
+        model, _ = NNTrainer(TrainingConfig(hidden_layers=[32], epochs=600,
+                                            lr=0.01, seed=0)).train(X, y)
+        pred_before = model.predict(X)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "model.pkl")
+            model.save(path)
+            loaded = type(model).load(path)
+        pred_after = loaded.predict(X)
+        np.testing.assert_allclose(pred_after, pred_before, rtol=1e-12)
+        self.assertIsNotNone(loaded.model.x_mean)
+
+        # 未归一化模型 (手工构造) 保存/加载也应工作
+        from autoquantum.nn.model import FeedForwardNN, PESNN
+        raw = PESNN(FeedForwardNN([1, 8, 1], seed=0))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "raw.pkl")
+            raw.save(path)
+            raw2 = PESNN.load(path)
+        self.assertIsNone(raw2.model.x_mean)
 
 
 if __name__ == "__main__":

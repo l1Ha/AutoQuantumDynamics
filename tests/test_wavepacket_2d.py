@@ -354,6 +354,42 @@ class TestEngineIntegration(unittest.TestCase):
                 self.assertTrue(os.path.exists(os.path.join(out_dir, fname)),
                                 f"缺少输出文件: {fname}")
 
+    def test_eckart_nn_fitted_pipeline(self):
+        """数据驱动管线: 2D NN 拟合 Eckart 面 → NN-PES 波包动力学。"""
+        from autoquantum.core.engine import AutoPipeline, PipelineConfig
+
+        with tempfile.TemporaryDirectory() as out_dir:
+            config = PipelineConfig(
+                system_name="H3_2D",
+                pes_type="eckart",
+                method="wavepacket",
+                use_nn_fit=True,
+                nn_hidden_layers=[40, 40],
+                nn_epochs=1200,
+                nn_max_train_points=3000,
+                wp_n_R=96, wp_n_r=64,
+                wp_n_steps=600,
+                wp_scan_points=2,
+                wp_save_gif=False,
+                output_dir=out_dir,
+            )
+            pipeline = AutoPipeline(config)
+            pipeline.run()
+
+            rmse = pipeline._results.get("nn_fit_rmse")
+            self.assertIsNotNone(rmse)
+            # Eckart 面 (V span ~0.1 au) 光滑; Adam 1200 轮应达 ~1e-3 (1% 量级)
+            self.assertLess(rmse, 0.01, f"2D NN 拟合 RMSE 过大: {rmse:.3e}")
+
+            # NN 面上的传播仍满足守恒恒等式
+            wp = pipeline._results["wavepacket_result"]
+            self.assertAlmostEqual(
+                float(wp.reaction_prob[-1] + wp.reflection_prob[-1]),
+                1.0, places=9)
+            self.assertAlmostEqual(
+                float(wp.norm_t[-1] + sum(v[-1] for v in wp.absorbed.values())),
+                1.0, places=9)
+
 
 if __name__ == "__main__":
     unittest.main()
