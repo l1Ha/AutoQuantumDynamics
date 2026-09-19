@@ -53,6 +53,10 @@ def main():
         help="隐藏层结构 (默认: 64 64 32)",
     )
     run_parser.add_argument(
+        "--nn-force-weight", type=float, default=None,
+        help="力训练权重 (以 ∂V/∂x 为监督目标; 默认: 2D=1.0, 1D=0)",
+    )
+    run_parser.add_argument(
         "--e-min", type=float, default=0.001,
         help="最小散射能量 (默认: 0.001)",
     )
@@ -96,6 +100,8 @@ def main():
 def _run_pipeline(args):
     output = args.output or f"output_{args.system.lower()}"
 
+    is_2d = args.system == "H3_2D" or args.pes in ("leps", "eckart")
+
     config = PipelineConfig(
         system_name=args.system,
         pes_type=args.pes,
@@ -103,6 +109,8 @@ def _run_pipeline(args):
         use_nn_fit=not args.no_nn,
         nn_hidden_layers=args.nn_layers,
         nn_epochs=args.nn_epochs,
+        nn_force_weight=(args.nn_force_weight if args.nn_force_weight is not None
+                         else (1.0 if is_2d else 0.0)),
         energy_min=args.e_min,
         energy_max=args.e_max,
         n_energy_points=args.e_points,

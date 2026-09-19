@@ -20,7 +20,10 @@ class TrainingConfig:
     normalize: bool = True
     # >0 时等距子采样到该点数 (大数据网格加速训练)
     max_train_points: int = 0
-    # Adam 优化器 (0 时退回朴素梯度下降)
+    # 力训练: dY (n, d) 为 ∂V/∂x 监督目标, force_weight 为其损失权重;
+    # 0 = 纯能量拟合
+    force_weight: float = 0.0
+    # Adam 优化器 (beta1=0 时退回朴素梯度下降)
     adam_beta1: float = 0.9
     adam_beta2: float = 0.999
     adam_eps: float = 1e-8
@@ -42,7 +45,8 @@ class NNTrainer:
             "val_loss": [],
         }
 
-    def train(self, X: np.ndarray, y: np.ndarray) -> Tuple[PESNN, Dict[str, List[float]]]:
+    def train(self, X: np.ndarray, y: np.ndarray,
+              dY: np.ndarray = None) -> Tuple[PESNN, Dict[str, List[float]]]:
         cfg = self.config
         X = np.asarray(X, dtype=float)
         if X.ndim == 1:
@@ -52,10 +56,20 @@ class NNTrainer:
         if y.size != n:
             raise ValueError(f"X/y 样本数不一致: {n} vs {y.size}")
 
+        force = cfg.force_weight > 0 and dY is not None
+        if dY is not None:
+            dY = np.asarray(dY, dtype=float)
+            if dY.shape != X.shape:
+                raise ValueError(f"dY 形状 {dY.shape} 应与 X {X.shape} 相同")
+            if cfg.force_weight <= 0:
+                print("  [warn] 提供了 dY 但 force_weight=0, 忽略力目标")
+
         # 等距子采样 (保持网格代表性)
         if cfg.max_train_points and n > cfg.max_train_points:
             idx = np.linspace(0, n - 1, cfg.max_train_points).astype(int)
             X, y = X[idx], y[idx]
+            if dY is not None:
+                dY = dY[idx]
             n = cfg.max_train_points
 
         n_train = int(n * cfg.train_split)
@@ -64,6 +78,8 @@ class NNTrainer:
 
         X_train, y_train = X[train_idx], y[train_idx]
         X_val, y_val = X[val_idx], y[val_idx]
+        dY_train = dY[train_idx] if dY is not None else None
+        dY_val = dY[val_idx] if dY is not None else None
 
         model = FeedForwardNN(
             layers=[d] + list(cfg.hidden_layers) + [1],
@@ -81,15 +97,28 @@ class NNTrainer:
             Xn_train = (X_train - x_mean) / x_scale
             Xn_val = (X_val - x_mean) / x_scale
             yn_train = (y_train - y_mean) / y_scale
+            # 力目标标准化: dV_std/dx_std = dV/dx · x_scale / y_scale
+            t_std = dY_train * (x_scale / y_scale) if force else None
         else:
             Xn_train, Xn_val, yn_train = X_train, X_val, y_train
+            t_std = dY_train if force else None
 
         best_val_loss = float("inf")
         best_state = None
         patience_counter = 0
 
+        # 联合损失 (物理单位): MSE_V + force_weight · MSE_F
+        def combined_loss(Xp, yp, dYp):
+            mse_v = np.mean((model.predict(Xp) - yp) ** 2)
+            if not force or dYp is None:
+                return mse_v
+            g_phys = model.gradient(Xp)
+            return mse_v + cfg.force_weight * np.mean((g_phys - dYp) ** 2)
+
         # Adam 状态 (作用于标准化数据)
         use_adam = self.config.adam_beta1 > 0
+        if force and not use_adam:
+            print("  [warn] adam_beta1=0 (朴素梯度下降) 不支持力训练, 力目标被忽略")
         t = 0
         mW = [np.zeros_like(w) for w in model.weights]
         vW = [np.zeros_like(w) for w in model.weights]
@@ -97,10 +126,17 @@ class NNTrainer:
         vB = [np.zeros_like(b) for b in model.biases]
         b1, b2, eps = (cfg.adam_beta1, cfg.adam_beta2, cfg.adam_eps)
 
-        def adam_step(Xb, yb):
+        def adam_step(Xb, yb, tb=None):
             nonlocal t
             activations, zs = model.forward(Xb)
             dw, db = model._backward(Xb, yb, activations, zs)
+            if force and tb is not None:
+                # 力损失 L_F = mean((g_std - t_std)²), 伴随 = 2(g-t)/(n·d)
+                g_std = model.input_gradient(Xb)
+                adj = 2.0 * (g_std - tb) / Xb.size * cfg.force_weight
+                dwf, dbf = model.input_gradient_backward(Xb, adj)
+                dw = [a + b_ for a, b_ in zip(dw, dwf)]
+                db = [a + b_ for a, b_ in zip(db, dbf)]
             t += 1
             for i in range(len(model.weights)):
                 mW[i] = b1 * mW[i] + (1 - b1) * dw[i]
@@ -118,20 +154,21 @@ class NNTrainer:
             if cfg.batch_size > 0:
                 bs = cfg.batch_size
                 for i in range(0, len(Xn_train), bs):
+                    sl = slice(i, i + bs)
+                    tb = t_std[sl] if force else None
                     if use_adam:
-                        adam_step(Xn_train[i:i + bs], yn_train[i:i + bs])
+                        adam_step(Xn_train[sl], yn_train[sl], tb)
                     else:
-                        model.train_step(Xn_train[i:i + bs],
-                                         yn_train[i:i + bs], cfg.lr)
+                        model.train_step(Xn_train[sl], yn_train[sl], cfg.lr)
             else:
                 if use_adam:
-                    adam_step(Xn_train, yn_train)
+                    adam_step(Xn_train, yn_train, t_std if force else None)
                 else:
                     model.train_step(Xn_train, yn_train, cfg.lr)
 
-            # 物理单位损失
-            train_loss = np.mean((model.predict(X_train) - y_train) ** 2)
-            val_loss = np.mean((model.predict(X_val) - y_val) ** 2)
+            # 物理单位联合损失
+            train_loss = combined_loss(X_train, y_train, dY_train)
+            val_loss = combined_loss(X_val, y_val, dY_val)
 
             self.history["train_loss"].append(train_loss)
             self.history["val_loss"].append(val_loss)

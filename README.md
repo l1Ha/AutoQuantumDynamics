@@ -5,6 +5,15 @@
 > ⚠️ 这是研究/教学原型，不是经过认证的科学计算软件。定量使用前请阅读
 > [功能边界与已知限制](#功能边界与已知限制) 与 [RELEASE_VALIDATION.md](RELEASE_VALIDATION.md)。
 
+## v0.6.0 亮点: 力训练
+
+NN 拟合以 ∂V/∂x 为监督目标 (double backprop, 经有限差分校验):
+
+- engine 2D 管线默认启用力训练 (`--nn-force-weight` 可调);
+- Eckart 2D: 能量 RMSE 4.6×10⁻³ → 4.5×10⁻⁴ au, 梯度 RMSE
+  2.2×10⁻² → 2.1×10⁻³ au/Bohr — 力目标同时正则化能量拟合;
+- summary/日志输出能量与梯度双 RMSE 指标。
+
 ## v0.5.0 亮点: 多维 NN 势能面拟合与数据驱动管线
 
 补齐 "PES 网格 → NN 代理面 → 量子动力学" 闭环:
@@ -124,8 +133,8 @@ autoquantum/
 
 - **从头算 PES 未实现**: `AbInitioData` 为数据容器 + 可调用函数采样器
   (`sample_function`, 带中心差分梯度), 无 ASE/PySCF 后端。
-- **NN 拟合**: 多维输入/标准化/Adam/解析梯度已具备; 力训练 (以
-  ∂V/∂x 为监督目标) 尚未实现 — `gradient()` 是其基础。
+- **NN 拟合**: 多维输入/标准化/Adam/解析梯度/力训练已具备;
+  力训练依赖解析或差分梯度来源, 从头算梯度 (ASE/PySCF) 仍缺失。
 - **NN 代理面动力学精度以 RMSE 日志为准**: 拟合误差直接传导进
   反应概率; engine 在 RMSE > 2%·V_span 时告警。
 - **LEPS 默认参数是教学模型**: 共线交换 MEP 势垒 ~0.14 au (3.8 eV),
@@ -142,8 +151,9 @@ autoquantum/
 - [x] 一维量子散射 (定态 + 含时波包)
 - [x] 二维含时波包传播 (Eckart / LEPS, v0.4.0)
 - [x] 多维 NN 拟合 + NN 代理面动力学 (v0.5.0)
+- [x] 力训练 (double backprop, v0.6.0)
 - [x] CLI 与 HTML 报告
-- [ ] 力训练 (以 dV/dx 为监督) 与能量反卷积收敛自动化
+- [ ] 波包能量反卷积与收敛自动化
 - [ ] 四原子以上复杂体系
 - [ ] GPU 加速
-- [ ] ASE/PySCF 自动数据生成
+- [ ] ASE/PySCF 自动数据生成 (含从头算梯度)

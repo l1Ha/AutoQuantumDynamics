@@ -21,6 +21,7 @@ class FeedForwardNN:
         self.activation_name = activation
         self.activation_fn = self._get_activation(activation)
         self.activation_deriv = self._get_derivative(activation)
+        self.activation_second_deriv = self._get_second_derivative(activation)
 
         if seed is not None:
             np.random.seed(seed)
@@ -63,6 +64,22 @@ class FeedForwardNN:
             return lambda x: (x > 0).astype(float)
         elif name == "linear":
             return lambda x: np.ones_like(x)
+        else:
+            raise ValueError(f"Unknown activation: {name}")
+
+    @staticmethod
+    def _get_second_derivative(name: str) -> Callable:
+        """激活函数的二阶导 (力训练 double-backprop 需要)。"""
+        if name == "tanh":
+            t = lambda x: np.tanh(x)
+            return lambda x: -2.0 * t(x) * (1.0 - t(x) ** 2)
+        elif name == "sigmoid":
+            s = lambda x: 1 / (1 + np.exp(-np.clip(x, -100, 100)))
+            return lambda x: s(x) * (1 - s(x)) * (1 - 2 * s(x))
+        elif name == "relu":
+            return lambda x: np.zeros_like(x)
+        elif name == "linear":
+            return lambda x: np.zeros_like(x)
         else:
             raise ValueError(f"Unknown activation: {name}")
 
@@ -124,16 +141,16 @@ class FeedForwardNN:
         activations, _ = self.forward(Xn)
         return self._denormalize_y(activations[-1]).ravel()
 
-    def gradient(self, X: np.ndarray) -> np.ndarray:
-        """解析输入梯度 dŷ/dX, 物理单位, 形状 (n, d)。
+    def input_gradient(self, X: np.ndarray) -> np.ndarray:
+        """原始网络输入梯度 dŷ/dX (不做归一化链式修正), 形状 (n, d)。
 
-        反向传播起始于线性输出 (导数 1), 逐层乘 Wᵀ 与隐藏层激活导数,
-        最后经归一化链式修正 y_scale / x_scale。
+        反向传播起始于线性输出 (导数 1), 逐层乘 Wᵀ 与隐藏层激活导数。
         """
-        X = self._shape_input(X)
-        Xn = self._normalize_x(X)
+        X = np.asarray(X, dtype=float)
+        if X.ndim == 1:
+            X = X.reshape(-1, 1)
 
-        activations = [Xn]
+        activations = [X]
         zs = []
         for i, (w, b) in enumerate(zip(self.weights, self.biases)):
             z = activations[-1] @ w + b
@@ -141,16 +158,96 @@ class FeedForwardNN:
             activations.append(z if i == len(self.weights) - 1
                                else self.activation_fn(z))
 
-        # d ŷ_std / d x_std: 从线性输出回传
+        # d ŷ / d x: 从线性输出回传
         g = np.ones_like(zs[-1])
         for i in range(len(self.weights) - 1, -1, -1):
             g = g @ self.weights[i].T
             if i > 0:
                 g = g * self.activation_deriv(zs[i - 1])
+        return g
 
+    def gradient(self, X: np.ndarray) -> np.ndarray:
+        """解析输入梯度 dŷ/dX, 物理单位, 形状 (n, d)。
+
+        经归一化链式修正 y_scale / x_scale; 与中心差分校验一致。
+        """
+        X = self._shape_input(X)
+        Xn = self._normalize_x(X)
+        g = self.input_gradient(Xn)
         if self.x_mean is not None:
             g = g * (self.y_scale / self.x_scale)
         return g
+
+    def input_gradient_backward(self, X: np.ndarray,
+                                adjG: np.ndarray) -> tuple:
+        """力训练核心: 反向的反向 (reverse-over-reverse double backprop)。
+
+        计算 Φ = Σ_ij adjG_ij · (input_gradient(X))_ij 对全部权重/偏置
+        的梯度, 返回 (dW, db)。∂Φ/∂θ = Σ adjG · ∂g/∂θ, 其中输入梯度
+        g 的计算图 (G/T 状态链) 被再次反向传播; g 通过激活导数 f'(z)
+        依赖前向图, 该依赖经 f''(z) 项进入前向图的 bar{z} 并被标准
+        反向传播继续处理 (偏置梯度即由此产生)。
+        """
+        X = np.asarray(X, dtype=float)
+        if X.ndim == 1:
+            X = X.reshape(-1, 1)
+        adjG = np.asarray(adjG, dtype=float)
+        if adjG.shape != X.shape:
+            raise ValueError(f"adjG 形状 {adjG.shape} 与 X {X.shape} 不符")
+
+        L = len(self.weights)
+
+        # --- 前向 (存 z, a) ---
+        activations = [X]
+        zs = []
+        for i, (w, b) in enumerate(zip(self.weights, self.biases)):
+            z = activations[-1] @ w + b
+            zs.append(z)
+            activations.append(z if i == L - 1 else self.activation_fn(z))
+
+        # --- pass 1: 输入梯度计算图的状态 ---
+        # G[l] = dŷ/dz_l, T[l] = G[l] @ W_lᵀ = dŷ/da_l;  g = T[0]
+        G = [None] * L
+        T = [None] * L
+        G[L - 1] = np.ones_like(zs[-1])
+        for l in range(L - 1, -1, -1):
+            T[l] = G[l] @ self.weights[l].T
+            if l > 0:
+                G[l - 1] = T[l] * self.activation_deriv(zs[l - 1])
+
+        # --- pass 2: 对 pass-1 图反向传播, 种子 bar{T_0} = adjG ---
+        # 注意: pass-1 的映射是 T = G @ Wᵀ (转置在前向的另一侧),
+        # 故 dW = barTᵀ @ G, barG = barT @ W (与前向 backprop 相反)。
+        dW = [np.zeros_like(w) for w in self.weights]
+        db = [np.zeros_like(b) for b in self.biases]
+        barT = [None] * L
+        barG = [None] * L
+        barz = [np.zeros_like(z) for z in zs]
+
+        # l = 0: g = T[0] = G[0] @ W_0ᵀ (无激活因子)
+        barT[0] = adjG
+        dW[0] += barT[0].T @ G[0]
+        barG[0] = barT[0] @ self.weights[0]
+
+        for l in range(1, L):
+            # G[l-1] = T[l] ⊙ f'(z_{l-1})
+            d_act = self.activation_deriv(zs[l - 1])
+            barT[l] = barG[l - 1] * d_act
+            barz[l - 1] += (barG[l - 1] * T[l]
+                            * self.activation_second_deriv(zs[l - 1]))
+            dW[l] += barT[l].T @ G[l]
+            barG[l] = barT[l] @ self.weights[l]
+        # barG[L-1] 是常数 ones 的伴随 → 丢弃
+
+        # --- 前向图的 bar{z} 继续标准反向传播 ---
+        for l in range(L - 1, -1, -1):
+            dW[l] += activations[l].T @ barz[l]
+            db[l] += np.sum(barz[l], axis=0, keepdims=True)
+            if l > 0:
+                barz[l - 1] += ((barz[l] @ self.weights[l].T)
+                                * self.activation_deriv(zs[l - 1]))
+
+        return dW, db
 
     def _backward(self, X: np.ndarray, y: np.ndarray,
                   activations: List[np.ndarray],
