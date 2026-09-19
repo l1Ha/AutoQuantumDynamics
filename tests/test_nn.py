@@ -176,6 +176,63 @@ class TestNNModel(unittest.TestCase):
             raw2 = PESNN.load(path)
         self.assertIsNone(raw2.model.x_mean)
 
+    def test_force_gradient_backward_fd(self):
+        # 力训练核心: input_gradient_backward (double backprop) 的解析
+        # 梯度必须与 Φ = Σ adjG·input_gradient 的有限差分一致
+        rng = np.random.RandomState(9)
+        model = FeedForwardNN([3, 7, 6, 1], activation="tanh", seed=2)
+        X = rng.uniform(-1, 1, (8, 3))
+        adjG = rng.normal(size=(8, 3))
+
+        def phi():
+            return float(np.sum(adjG * model.input_gradient(X)))
+
+        dW, db = model.input_gradient_backward(X, adjG)
+        eps = 1e-6
+        for i in range(len(model.weights)):
+            for arr, grad in ((model.weights[i], dW[i]),
+                              (model.biases[i], db[i])):
+                num = np.zeros_like(arr)
+                it = np.nditer(arr, flags=["multi_index"])
+                while not it.finished:
+                    idx = it.multi_index
+                    orig = arr[idx]
+                    arr[idx] = orig + eps
+                    lp = phi()
+                    arr[idx] = orig - eps
+                    lm = phi()
+                    arr[idx] = orig
+                    num[idx] = (lp - lm) / (2 * eps)
+                    it.iternext()
+                np.testing.assert_allclose(grad, num, rtol=1e-5, atol=1e-8)
+
+    def test_force_training_improves_gradient(self):
+        # 力训练 (fw=1) 应显著提升代理面的梯度保真度, 且不劣化能量拟合
+        from autoquantum.nn.train import NNTrainer, TrainingConfig
+
+        g1, g2 = np.meshgrid(np.linspace(-2, 2, 31), np.linspace(-2, 2, 31),
+                             indexing="ij")
+        X = np.column_stack([g1.ravel(), g2.ravel()])
+        y = np.sin(2 * X[:, 0]) + 0.3 * X[:, 1] ** 2
+        dY = np.column_stack([2 * np.cos(2 * X[:, 0]),
+                              0.6 * X[:, 1]])
+
+        def fit(fw):
+            m, _ = NNTrainer(TrainingConfig(hidden_layers=[32, 32],
+                                            epochs=1200, lr=0.01, seed=4,
+                                            force_weight=fw)).train(
+                X, y, dY=dY if fw > 0 else None)
+            v = np.sqrt(np.mean((m.predict(X) - y) ** 2))
+            g = np.sqrt(np.mean((m.gradient(X) - dY) ** 2))
+            return v, g
+
+        v0, g0 = fit(0.0)
+        v1, g1_ = fit(1.0)
+        self.assertLess(g1_, 0.5 * g0,
+                        f"力训练未提升梯度精度: {g1_:.3e} vs {g0:.3e}")
+        self.assertLess(v1, 2.0 * v0 + 1e-3,
+                        f"力训练严重劣化能量拟合: {v1:.3e} vs {v0:.3e}")
+
 
 if __name__ == "__main__":
     unittest.main()

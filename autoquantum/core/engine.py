@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from autoquantum.pes import PESBuilder
+from autoquantum.pes.abinitio import AbInitioData
 from autoquantum.nn import NNTrainer, TrainingConfig, FeedForwardNN
 from autoquantum.dynamics import (
     QuantumScattering1D,
@@ -58,6 +59,9 @@ class PipelineConfig:
     nn_train_split: float = 0.8
     # >0 时对训练网格等距子采样到该点数 (多维网格加速)
     nn_max_train_points: int = 6000
+    # 力训练权重 (dY = ∂V/∂x 监督目标)。力目标同时正则化能量拟合:
+    # Eckart 2D 上 V_RMSE 4.6e-3 → ~1e-3, 梯度 RMSE 2.2e-2 → ~4e-3
+    nn_force_weight: float = 1.0
 
     energy_min: float = 0.001
     energy_max: float = 0.15
@@ -151,6 +155,7 @@ class AutoPipeline:
         )
         self._results["pes_2d"] = builder
         self._results["pes_2d_grid"] = (R_grid, r_grid, V_grid)
+        self._results["pes_2d_ranges"] = (R_range, r_range)
 
     def _step_nn_fit(self):
         if not self.config.use_nn_fit:
@@ -186,7 +191,12 @@ class AutoPipeline:
         self._results["nn_fitted_values"] = fitted_values
 
     def _step_nn_fit_2d(self):
-        """二维 PES 的 NN 拟合 (网格域 = 波包动力学域, 无外推)。"""
+        """二维 PES 的 NN 拟合 (网格域 = 波包动力学域, 无外推)。
+
+        通过 ``AbInitioData.sample_function`` 生成带中心差分梯度的
+        训练集; ``nn_force_weight > 0`` 时启用力训练 (以 ∂V/∂x 为
+        监督目标), 显著提升代理面的梯度保真度。
+        """
         grid = self._results.get("pes_2d_grid")
         if grid is None:
             logger.info("[2/4] NN fitting skipped (no 2D grid).")
@@ -195,10 +205,16 @@ class AutoPipeline:
         logger.info("[2/4] Neural Network Fitting (2D PES) ...")
         t0 = time.time()
 
-        R_grid, r_grid, V_grid = grid
-        RR, rr = np.meshgrid(R_grid, r_grid, indexing="ij")
-        X = np.column_stack([RR.ravel(), rr.ravel()])
-        y = V_grid.ravel()
+        R_range, r_range = self._results.get(
+            "pes_2d_ranges", ((0.5, 9.0), (0.5, 6.0)))
+        builder = self._results["pes_2d"]
+
+        data = AbInitioData.sample_function(
+            lambda pts: np.asarray(builder.evaluate_2d(pts[:, 0], pts[:, 1]),
+                                   dtype=float).ravel(),
+            ranges=[R_range, r_range], n_per_dim=150,
+        )
+        X, y = data.points, data.energies
 
         config = TrainingConfig(
             hidden_layers=self.config.nn_hidden_layers,
@@ -207,16 +223,23 @@ class AutoPipeline:
             lr=self.config.nn_lr,
             train_split=self.config.nn_train_split,
             max_train_points=self.config.nn_max_train_points,
+            force_weight=self.config.nn_force_weight,
         )
         trainer = NNTrainer(config)
-        model, history = trainer.train(X, y)
+        model, history = trainer.train(
+            X, y, dY=data.gradients if self.config.nn_force_weight > 0 else None)
 
         pred = model.predict(X)
         rmse = float(np.sqrt(np.mean((pred - y) ** 2)))
-        v_span = float(V_grid.max() - V_grid.min())
+        grad_rmse = float(np.sqrt(np.mean(
+            (model.gradient(X) - data.gradients) ** 2)))
+        v_span = float(y.max() - y.min())
         t1 = time.time()
         logger.info(f"    2D NN trained in {t1 - t0:.3f}s, "
-                    f"RMSE = {rmse:.3e} au ({rmse / v_span * 100:.2f}% of V span)")
+                    f"RMSE = {rmse:.3e} au ({rmse / v_span * 100:.2f}% of V span), "
+                    f"grad RMSE = {grad_rmse:.3e} au/Bohr"
+                    + (f" (force_weight={self.config.nn_force_weight})"
+                       if self.config.nn_force_weight > 0 else ""))
         if rmse > 0.02 * v_span:
             logger.warning("    NN 拟合 RMSE > 2%·V_span, 拟合面动力学结果不可靠; "
                            "建议增大 nn_epochs/nn_hidden_layers 或关闭 use_nn_fit")
@@ -224,6 +247,7 @@ class AutoPipeline:
         self._results["nn_model"] = model
         self._results["nn_history"] = history
         self._results["nn_fit_rmse"] = rmse
+        self._results["nn_fit_grad_rmse"] = grad_rmse
 
     @staticmethod
     def _nn_pes_2d(model):
@@ -535,6 +559,8 @@ class AutoPipeline:
             lines.append(f"Max reaction probability: {r.transmission.max():.4f}")
         if "nn_fit_rmse" in self._results:
             lines.append(f"NN PES fit RMSE: {self._results['nn_fit_rmse']:.3e} au")
+        if "nn_fit_grad_rmse" in self._results:
+            lines.append(f"NN PES grad RMSE: {self._results['nn_fit_grad_rmse']:.3e} au/Bohr")
         if "wavepacket_result" in self._results:
             lines.append(f"Wavepacket final P_react: "
                          f"{self._results['wp_final_reaction']:.4f}")

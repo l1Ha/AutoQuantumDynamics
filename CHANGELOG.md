@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.6.0 — 力训练 (double backprop)
+
+NN 拟合以 ∂V/∂x 为监督目标, 显著提升代理面的能量与梯度保真度。
+
+### Added
+
+- **力训练**: `NNTrainer.train(X, y, dY=..., force_weight=...)` —
+  联合损失 `MSE_V + w·MSE_F`; `dY (n, d)` 为 ∂V/∂x 监督目标
+  (标准化空间自动换算)。
+- **`FeedForwardNN.input_gradient_backward`**: 反向的反向
+  (reverse-over-reverse double backprop), 计算 Σ adjG·(输入梯度) 对
+  全部权重/偏置的解析梯度 — 经有限差分校验 (误差 ~10⁻¹⁰, 覆盖
+  tanh/sigmoid/relu)。注意 pass-1 映射 T = G·Wᵀ 的转置方向与
+  前向 backprop 相反 (dW = barTᵀ·G)。
+- **二阶激活导数**: tanh/sigmoid/relu 的 f″ (力训练经 f″ 项把
+  梯度依赖传入偏置)。
+- **engine 2D 拟合默认启用力训练** (`nn_force_weight=1.0`, CLI
+  `--nn-force-weight`): 训练数据由 `sample_function` 生成 (含中心
+  差分梯度), 日志与 summary 输出能量 RMSE 与梯度 RMSE 双指标。
+
+### 效果 (Eckart 2D, [40,40], Adam lr=0.005, 1200 轮, 固定种子)
+
+| 配置 | V_RMSE (au) | 梯度 RMSE (au/Bohr) |
+|---|---|---|
+| 纯能量拟合 (w=0) | 4.6×10⁻³ | 2.2×10⁻² |
+| 力训练 (w=0.5) | 1.1×10⁻³ | 4.4×10⁻³ |
+| 力训练 (w=2.0) | 4.6×10⁻⁴ | 2.3×10⁻³ |
+
+CLI 实测 (w=1.0, 800 轮): V_RMSE 4.5×10⁻⁴ au (0.03% V span)。
+力目标同时正则化能量拟合 — 两者同步改善。
+
+### Changed
+
+- `PipelineConfig.nn_force_weight` 默认 1.0 (2D), CLI 对 1D 体系
+  默认 0; 朴素梯度下降路径 (adam_beta1=0) 不支持力训练, 会输出告警。
+
+### 验证与限制
+
+- 36 项测试通过 (新增: double-backprop FD 门控、力训练提升梯度
+  精度断言)。
+- 力训练目前依赖解析/差分梯度来源; 从头算梯度 (ASE/PySCF) 仍属
+  路线图。能量反卷积与收敛自动化未在本版。
+
 ## 0.5.0 — 多维 NN 势能面拟合与数据驱动管线
 
 补齐 "任意 1D/2D PES → NN 代理 → 动力学" 的数据驱动闭环 (从头算
