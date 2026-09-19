@@ -54,8 +54,10 @@ class PipelineConfig:
     nn_hidden_layers: List[int] = field(default_factory=lambda: [64, 64, 32])
     nn_activation: str = "tanh"
     nn_epochs: int = 500
-    nn_lr: float = 0.001
+    nn_lr: float = 0.005
     nn_train_split: float = 0.8
+    # >0 时对训练网格等距子采样到该点数 (多维网格加速)
+    nn_max_train_points: int = 6000
 
     energy_min: float = 0.001
     energy_max: float = 0.15
@@ -128,7 +130,10 @@ class AutoPipeline:
             logger.info(f"    2D PES built in {time.time() - t0:.3f}s")
 
     def _step_build_pes_2d(self):
-        """二维体系直接构建 2D PES (LEPS / Eckart)。"""
+        """二维体系直接构建 2D PES (LEPS / Eckart)。
+
+        网格范围与含时波包动力学域一致, 保证 NN 拟合 (若启用) 不外推。
+        """
         pes_type = self.config.pes_type
         if pes_type not in ("leps", "eckart"):
             pes_type = self.config.pes_type = "eckart"
@@ -136,11 +141,13 @@ class AutoPipeline:
 
         if pes_type == "eckart":
             builder = EckartBuilder(self.config.pes_params)
+            R_range, r_range = (0.5, 9.0), (0.5, 3.5)
         else:
             builder = LEPSBuilder(self.config.pes_params)
+            R_range, r_range = (0.5, 10.0), (0.2, 9.5)
 
         R_grid, r_grid, V_grid = builder.generate_grid(
-            R_range=(0.5, 9.0), r_range=(0.5, 6.0), n_R=150, n_r=150,
+            R_range, r_range, n_R=150, n_r=150,
         )
         self._results["pes_2d"] = builder
         self._results["pes_2d_grid"] = (R_grid, r_grid, V_grid)
@@ -149,8 +156,8 @@ class AutoPipeline:
         if not self.config.use_nn_fit:
             logger.info("[2/4] NN fitting skipped.")
             return
-        if "pes_grid" not in self._results:
-            logger.info("[2/4] NN fitting skipped (2D system).")
+        if self.is_2d:
+            self._step_nn_fit_2d()
             return
 
         logger.info("[2/4] Neural Network Fitting ...")
@@ -165,6 +172,7 @@ class AutoPipeline:
             epochs=self.config.nn_epochs,
             lr=self.config.nn_lr,
             train_split=self.config.nn_train_split,
+            max_train_points=self.config.nn_max_train_points,
         )
         trainer = NNTrainer(config)
         model, history = trainer.train(grid, values)
@@ -176,6 +184,57 @@ class AutoPipeline:
         self._results["nn_model"] = model
         self._results["nn_history"] = history
         self._results["nn_fitted_values"] = fitted_values
+
+    def _step_nn_fit_2d(self):
+        """二维 PES 的 NN 拟合 (网格域 = 波包动力学域, 无外推)。"""
+        grid = self._results.get("pes_2d_grid")
+        if grid is None:
+            logger.info("[2/4] NN fitting skipped (no 2D grid).")
+            return
+
+        logger.info("[2/4] Neural Network Fitting (2D PES) ...")
+        t0 = time.time()
+
+        R_grid, r_grid, V_grid = grid
+        RR, rr = np.meshgrid(R_grid, r_grid, indexing="ij")
+        X = np.column_stack([RR.ravel(), rr.ravel()])
+        y = V_grid.ravel()
+
+        config = TrainingConfig(
+            hidden_layers=self.config.nn_hidden_layers,
+            activation=self.config.nn_activation,
+            epochs=self.config.nn_epochs,
+            lr=self.config.nn_lr,
+            train_split=self.config.nn_train_split,
+            max_train_points=self.config.nn_max_train_points,
+        )
+        trainer = NNTrainer(config)
+        model, history = trainer.train(X, y)
+
+        pred = model.predict(X)
+        rmse = float(np.sqrt(np.mean((pred - y) ** 2)))
+        v_span = float(V_grid.max() - V_grid.min())
+        t1 = time.time()
+        logger.info(f"    2D NN trained in {t1 - t0:.3f}s, "
+                    f"RMSE = {rmse:.3e} au ({rmse / v_span * 100:.2f}% of V span)")
+        if rmse > 0.02 * v_span:
+            logger.warning("    NN 拟合 RMSE > 2%·V_span, 拟合面动力学结果不可靠; "
+                           "建议增大 nn_epochs/nn_hidden_layers 或关闭 use_nn_fit")
+
+        self._results["nn_model"] = model
+        self._results["nn_history"] = history
+        self._results["nn_fit_rmse"] = rmse
+
+    @staticmethod
+    def _nn_pes_2d(model):
+        """把多维 PESNN 包装为波包传播子需要的 V(R, r) 闭包。"""
+        def V(R, r):
+            Rb = np.asarray(R, dtype=float)
+            rb = np.asarray(r, dtype=float)
+            Rb, rb = np.broadcast_arrays(Rb, rb)
+            pts = np.column_stack([Rb.ravel(), rb.ravel()])
+            return model.predict(pts).reshape(Rb.shape)
+        return V
 
     # ------------------------------------------------------------------
     def _step_dynamics(self):
@@ -311,6 +370,13 @@ class AutoPipeline:
             # CAP 必须避开初始波包 (r0≈1.4): r_min CAP 区 [0.2, ~0.65]
             cap_edges = ("R_min", "R_max", "r_min", "r_max")
             cap_frac = 0.05
+
+        # 数据驱动管线: 若启用 NN 拟合, 动力学运行在 NN 代理面上
+        nn_model = self._results.get("nn_model")
+        if nn_model is not None:
+            pes = self._nn_pes_2d(nn_model)
+            logger.info(f"    Dynamics on NN-fitted PES "
+                        f"(RMSE = {self._results.get('nn_fit_rmse', float('nan')):.3e} au)")
 
         R_grid = np.linspace(*R_range, cfg.wp_n_R)
         r_grid = np.linspace(*r_range, cfg.wp_n_r)
@@ -467,6 +533,8 @@ class AutoPipeline:
             lines.append(f"Dynamics: {dim.upper()}")
             lines.append(f"Energy range: {r.energy[0]:.4f} - {r.energy[-1]:.4f} au")
             lines.append(f"Max reaction probability: {r.transmission.max():.4f}")
+        if "nn_fit_rmse" in self._results:
+            lines.append(f"NN PES fit RMSE: {self._results['nn_fit_rmse']:.3e} au")
         if "wavepacket_result" in self._results:
             lines.append(f"Wavepacket final P_react: "
                          f"{self._results['wp_final_reaction']:.4f}")
