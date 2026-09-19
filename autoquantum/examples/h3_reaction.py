@@ -2,7 +2,8 @@
 """H + H₂ → H₂ + H 共线反应 — Eckart 势垒 + 谐振耦合势能面。"""
 
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))))
 
 import numpy as np
 from autoquantum.pes.eckart import EckartBuilder
