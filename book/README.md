@@ -29,7 +29,8 @@
 
 ## 使用方式
 
-- 按章阅读: 公式 ($$...$$) 需要支持 LaTeX 的 Markdown 阅读器 (Typora/Obsidian/VS Code)。
+- 按章阅读: 公式 ($$...$$) 需要支持 LaTeX 的 Markdown 阅读器 (Typora/Obsidian/VS Code); 配图 (PNG) 直接内嵌。
+- **配图全部由真实计算生成**: `python scripts/make_book_figures.py` 重现 `book/figures/` 中全部 12 张图 (无装饰性示意图; 概念图在标题中明确标注 schematic); 图中坐标轴为英文, 中文说明在正文图注。
 - 动手实验可直接复制运行, 依赖仅 numpy/matplotlib/scipy:
 
 ```bash
@@ -43,4 +44,4 @@ python -m unittest discover -s tests
 
 ## 版本对应
 
-本书对应 AutoQuantum v0.8.1 (第 3.6 节含从头算后端与数据生成; 第 4 章为电子结构基础)。核心验证数值 (波包 vs 解析基准、力训练提升、double-backprop FD 门控) 见仓库 [RELEASE_VALIDATION.md](../RELEASE_VALIDATION.md)。
+本书对应 AutoQuantum v0.9.0 (第 3.6 节含从头算后端与数据生成; 第 4 章电子结构基础; 第 6 章分子振动基础; 全书 12 张真实计算配图)。核心验证数值 (波包 vs 解析基准、力训练提升、double-backprop FD 门控) 见仓库 [RELEASE_VALIDATION.md](../RELEASE_VALIDATION.md)。
