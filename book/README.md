@@ -16,13 +16,14 @@
 | I 基础 | [01 数学预备](chapters/01-数学预备.md) | 复数空间、DFT/卷积定理、采样与 Nyquist、差分与求积 |
 | | [02 量子力学基础](chapters/02-量子力学基础.md) | Born-Oppenheimer、定态/含时方程、期望值、原子单位 |
 | II 势能面 | [03 势能面](chapters/03-势能面.md) | 键坐标 vs Jacobi 坐标、约化质量、Morse/LEPS/Eckart、数据接口 |
-| III 机器学习 | [04 神经网络势能面](chapters/04-神经网络势能面.md) | 反向传播、Adam、标准化、力训练与双反向传播 |
-| IV 动力学 | [05 定态散射](chapters/05-定态散射.md) | 匹配条件、透射/反射、Numerov、实验性 2D 求解器 |
-| | [06 含时波包](chapters/06-含时波包.md) | 高斯波包、分裂算符、CAP、概率记账恒等式 |
-| | [07 二维反应动力学](chapters/07-二维反应动力学.md) | 交换分界面、能量平均透射率、阈值行为 |
-| V 工程 | [08 数值验证](chapters/08-数值验证.md) | 收敛研究、解析基准、有限差分门控、恒等式测试、仲裁工作流 |
-| | [09 软件架构与发布](chapters/09-软件架构与发布.md) | 分层架构、配置驱动管线、可复现发布流程 |
-| VI 展望 | [10 进阶专题](chapters/10-进阶专题.md) | 能量反卷积、主动学习、力匹配、对称性、GPU 路线 (多数未实现) |
+| III 电子结构 | [04 电子结构基础](chapters/04-电子结构基础.md) | Born-Oppenheimer 变分求解、基组与高斯基函数、SCF/Roothaan、DFT (LDA/GGA)、半经验 xTB、梯度与力 |
+| IV 机器学习 | [05 神经网络势能面](chapters/05-神经网络势能面.md) | 反向传播、Adam、标准化、力训练与双反向传播 |
+| V 动力学 | [06 定态散射](chapters/06-定态散射.md) | 匹配条件、透射/反射、Numerov、实验性 2D 求解器 |
+| | [07 含时波包](chapters/07-含时波包.md) | 高斯波包、分裂算符、CAP、概率记账恒等式 |
+| | [08 二维反应动力学](chapters/08-二维反应动力学.md) | 交换分界面、能量平均透射率、阈值行为 |
+| VI 工程 | [09 数值验证](chapters/09-数值验证.md) | 收敛研究、解析基准、有限差分门控、恒等式测试、仲裁工作流 |
+| | [10 软件架构与发布](chapters/10-软件架构与发布.md) | 分层架构、配置驱动管线、可复现发布流程 |
+| VII 展望 | [11 进阶专题](chapters/11-进阶专题.md) | 能量反卷积、主动学习、力匹配、对称性、GPU 路线 (多数未实现) |
 | 附录 | [A 术语与公式速查](appendix/附录A-术语与公式速查.md) | 85 条术语 + 公式表 (标注代码位置) |
 | | [B 常见陷阱与练习](appendix/附录B-常见陷阱与练习.md) | 本项目真实踩过的坑 + 15 道分级练习 |
 
@@ -42,4 +43,4 @@ python -m unittest discover -s tests
 
 ## 版本对应
 
-本书对应 AutoQuantum v0.8.0 (第 3.6 节含从头算后端与数据生成)。核心验证数值 (波包 vs 解析基准、力训练提升、double-backprop FD 门控) 见仓库 [RELEASE_VALIDATION.md](../RELEASE_VALIDATION.md)。
+本书对应 AutoQuantum v0.8.1 (第 3.6 节含从头算后端与数据生成; 第 4 章为电子结构基础)。核心验证数值 (波包 vs 解析基准、力训练提升、double-backprop FD 门控) 见仓库 [RELEASE_VALIDATION.md](../RELEASE_VALIDATION.md)。
