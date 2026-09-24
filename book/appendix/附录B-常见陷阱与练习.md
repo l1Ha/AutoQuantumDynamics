@@ -14,7 +14,7 @@
 | 禁阻区递推出现非物理振荡/结果被裁成看似正常 | `quantum_2d` 中心差分递推把 $2-h^2k^2$ 写成 $2+h^2k^2$；裁剪又掩盖错误 | 使用 $2-h^2k^2$，允许 $k^2<0$ 的虚指数；不要用 `[0,1]` 裁剪掩盖无效输出 | 建议新增 `test_quantum_2d_recurrence_sign` |
 | 1D 波包向左传播时“透射/反射”曲线互换 | 方向由 `p0` 决定：从右侧向左时左侧是透射区，engine 的 CAP 标签曾按相反方向理解 | 透射=越过垒心区域+左 CAP；反射=返回区域+右 CAP，并用 $p_0$ 检查 | 建议新增 `test_1d_wavepacket_labels_follow_momentum` |
 | 2D 扫描把 $E=p_R^2/(2\mu_R)$ 解释成总能量，阈值位置错误 | `WavePacket2DScan` 文档规定的是初始平动碰撞能，不含振动零点能 | 读取 `energy_*` 语义并在图、表中标注“collision energy”；需要总能量时另加 $E_{\rm vib}$ | 建议新增 `test_energy_scan_uses_collision_energy` |
-| 通道和不再为 1，掩码看似合理却没有报错 | product/reactant 掩码重叠，或两者没有覆盖整个网格；当前只对重叠显式抛错，完整划分才是恒等式条件 | 用互补条件 `$R<2.0$` 与 `$R\ge2.0$`；重叠抛 `ValueError`，空隙用覆盖测试发现 | 建议新增 `test_complementary_masks_conserve_channels` |
+| 通道和不再为 1，掩码看似合理却没有报错 | product/reactant 掩码重叠，或两者没有覆盖整个网格；当前只对重叠显式抛错，完整划分才是恒等式条件 | 用互补条件 $R<2.0$ 与 $R\ge2.0$；重叠抛 `ValueError`，空隙用覆盖测试发现 | 建议新增 `test_complementary_masks_conserve_channels` |
 | 拟合 PES 无论怎样训练都落在约 `[-1,1]`，物理能量超界 | 输出层误用 tanh；有界激活只能用于隐藏层 | `FeedForwardNN.forward` 保持输出线性；`test_linear_output_layer` 固定预激活 3.0，`test_fit_outside_tanh_range` 覆盖区间外目标 | `test_linear_output_layer` / `test_fit_outside_tanh_range` |
 | 梯度在不同机器/网格上忽大忽小，NN 力训练不稳定 | FD 的 $h$ 太小会放大舍入误差，太大则有 $O(h^2)$ 截断误差；`grad_h=1e-5` 不是普适常数 | 按能量尺度和函数曲率选 $h$，至少做两种步长/Richardson 检查；同时验证解析梯度 | `test_force_gradient_backward_fd` |
 | 安装包中出现 `torch`，但模型完全由 NumPy 实现 | 旧依赖表残留，代码没有 torch 导入；`requirements.txt` 当前仅列 numpy/matplotlib/scipy | 删除未使用依赖并检查构建元数据；纯 NumPy NN 是当前验证策略 | 建议新增 `test_nn_dependency_surface` |
