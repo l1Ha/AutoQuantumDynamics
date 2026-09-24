@@ -16,3 +16,5 @@ build/
 .pytest_cache/
 __pycache__/
 output_h2_1d/
+book/build/
+book/figures/__pycache__/

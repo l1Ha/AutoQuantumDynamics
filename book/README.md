@@ -1,6 +1,8 @@
-# AutoQuantum 教程与理论手册
+# 《从势能面到波包》
 
-从量子力学基础到可验证的分子反应动力学计算——与 [AutoQuantum](../) 代码库逐行对应的中文书籍。
+**分子反应动力学的量子理论、数值验证与代码实践**
+
+从量子力学基础到可验证的分子反应动力学计算——与 [AutoQuantum](../) 代码库逐行对应的中文书籍 (v0.9.0)。
 
 ## 适读人群
 
@@ -44,4 +46,4 @@ python -m unittest discover -s tests
 
 ## 版本对应
 
-本书对应 AutoQuantum v0.9.0 (第 3.6 节含从头算后端与数据生成; 第 4 章电子结构基础; 第 6 章分子振动基础; 全书 12 张真实计算配图)。核心验证数值 (波包 vs 解析基准、力训练提升、double-backprop FD 门控) 见仓库 [RELEASE_VALIDATION.md](../RELEASE_VALIDATION.md)。
+本书对应 AutoQuantum v0.9.1 (第 3.6 节含从头算后端与数据生成; 第 4 章电子结构基础; 第 6 章分子振动基础; 全书 12 张真实计算配图)。核心验证数值 (波包 vs 解析基准、力训练提升、double-backprop FD 门控) 见仓库 [RELEASE_VALIDATION.md](../RELEASE_VALIDATION.md)。
