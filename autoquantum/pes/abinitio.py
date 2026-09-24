@@ -86,6 +86,112 @@ class AbInitioData:
     def n_points(self) -> int:
         return len(self.points) if self.points is not None else 0
 
+    @classmethod
+    def sample_geometries(cls, calculator,
+                          ref_coords: np.ndarray,
+                          ranges: Tuple[Tuple[float, float], ...],
+                          n_per_dim: int,
+                          active_atoms: Optional[Sequence[int]] = None,
+                          axes: Sequence[int] = (0, 1, 2),
+                          min_distance: float = 1.2,
+                          max_points: int = 5000,
+                          seed: int = 42,
+                          verbose: bool = False) -> "AbInitioData":
+        """用电子结构后端在笛卡尔位移网格上采样 (能量+梯度)。
+
+        采样方案: 参考几何 ``ref_coords`` (N,3) Bohr, 指定原子在指定
+        坐标轴方向按 ``ranges``/``n_per_dim`` 均匀位移; 剔除原子间距
+        小于 ``min_distance`` 的坍缩几何; 均匀子采样至 ``max_points``。
+
+        返回的 ``points`` 为**笛卡尔坐标展平** (N*3,) —— 直接作为 NN
+        训练特征 (无置换对称性处理, 见 README 限制)。
+        """
+        from itertools import product
+
+        ref = np.asarray(ref_coords, dtype=float)
+        n_atoms = ref.shape[0]
+        atoms = list(active_atoms) if active_atoms is not None \
+            else list(range(n_atoms))
+        dims = [(a, ax) for a in atoms for ax in axes]
+        if not dims:
+            raise ValueError("active_atoms/axes 未选出任何采样维度")
+        if len(ranges) == 1:
+            ranges = tuple(ranges) * len(dims)
+        if len(ranges) != len(dims):
+            raise ValueError(f"ranges 长度 {len(ranges)} 与采样维度数 "
+                             f"{len(dims)} 不符 (单元素范围可广播)")
+
+        axes_vals = [np.linspace(lo, hi, n_per_dim) for lo, hi in ranges]
+        grids = np.meshgrid(*axes_vals, indexing="ij")
+        combos = np.stack([g.ravel() for g in grids], axis=1)  # (M, n_dim)
+        n_raw = combos.shape[0]
+
+        coords_list = np.repeat(ref[None, :, :], n_raw, axis=0)
+        for k, (atom, ax) in enumerate(dims):
+            coords_list[:, atom, ax] += combos[:, k]
+
+        # 最小原子间距过滤
+        d2 = ((coords_list[:, :, None, :] - coords_list[:, None, :, :]) ** 2
+              ).sum(-1)
+        iu = np.triu_indices(n_atoms, k=1)
+        pair_d2 = d2[:, iu[0], iu[1]]                  # (M, n_pairs)
+        keep = np.all(pair_d2 >= min_distance ** 2, axis=1)   # (M,)
+        coords_list = coords_list[keep]
+        if coords_list.shape[0] == 0:
+            raise ValueError("min_distance 过滤后无剩余几何; 请放宽阈值")
+
+        if max_points and coords_list.shape[0] > max_points:
+            rng = np.random.RandomState(seed)
+            idx = rng.choice(coords_list.shape[0], max_points, replace=False)
+            coords_list = coords_list[np.sort(idx)]
+
+        n = coords_list.shape[0]
+        energies = np.zeros(n)
+        gradients = np.zeros_like(coords_list)
+        for i in range(n):
+            e, g = calculator.energy_and_gradient(coords_list[i])
+            energies[i] = e
+            gradients[i] = g
+            if verbose and (i + 1) % max(1, n // 10) == 0:
+                print(f"  sampled {i + 1}/{n}")
+
+        points = coords_list.reshape(n, -1)  # (n, 3N) 笛卡尔特征
+        data = cls()
+        data.from_arrays(points, energies, gradients)
+        data.provenance = dict(getattr(calculator, "provenance", {}))
+        data.geometry = coords_list.copy()
+        return data
+
+    def save_npz(self, path: str, provenance: Optional[Dict] = None,
+                 geometry: Optional[np.ndarray] = None):
+        """保存数据集 (points/energies/gradients + provenance JSON)。"""
+        import json
+        if self.points is None:
+            raise ValueError("无数据可保存")
+        arrays = {"points": self.points, "energies": self.energies}
+        if self.gradients is not None:
+            arrays["gradients"] = self.gradients
+        prov = provenance or getattr(self, "provenance", None)
+        if prov:
+            arrays["provenance_json"] = np.array(json.dumps(prov))
+        geom = geometry if geometry is not None else getattr(self, "geometry", None)
+        if geom is not None:
+            arrays["geometry"] = geom
+        np.savez(path, **arrays)
+
+    @classmethod
+    def load_npz(cls, path: str) -> "AbInitioData":
+        import json
+        with np.load(path, allow_pickle=False) as f:
+            data = cls()
+            data.from_arrays(f["points"], f["energies"],
+                             f["gradients"] if "gradients" in f else None)
+            if "provenance_json" in f:
+                data.provenance = json.loads(str(f["provenance_json"]))
+            if "geometry" in f:
+                data.geometry = f["geometry"]
+        return data
+
     def split(self, train_ratio: float = 0.8) -> Tuple["AbInitioData", "AbInitioData"]:
         n = self.n_points
         indices = np.random.permutation(n)

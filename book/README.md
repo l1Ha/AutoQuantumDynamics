@@ -42,4 +42,4 @@ python -m unittest discover -s tests
 
 ## 版本对应
 
-本书对应 AutoQuantum v0.7.0。核心验证数值 (波包 vs 解析基准、力训练提升、double-backprop FD 门控) 见仓库 [RELEASE_VALIDATION.md](../RELEASE_VALIDATION.md)。
+本书对应 AutoQuantum v0.8.0 (第 3.6 节含从头算后端与数据生成)。核心验证数值 (波包 vs 解析基准、力训练提升、double-backprop FD 门控) 见仓库 [RELEASE_VALIDATION.md](../RELEASE_VALIDATION.md)。

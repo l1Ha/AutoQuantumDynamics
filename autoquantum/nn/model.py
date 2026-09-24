@@ -329,3 +329,21 @@ class PESNN:
     @classmethod
     def load(cls, path: str) -> "PESNN":
         return cls(FeedForwardNN.load(path))
+
+
+def nn_pes_2d(model: PESNN):
+    """把多维 PESNN 包装为二维传播子需要的 V(R, r) 闭包。
+
+    供手工数据驱动工作流使用 (不经 engine): 训练好的代理面可直接
+    喂给 ``WavePacket2DPropagator``。
+
+    >>> pes = nn_pes_2d(model)
+    >>> prop = WavePacket2DPropagator(pes, R, r, mass_R, mass_r, dt=0.5)
+    """
+    def V(R, r):
+        Rb = np.asarray(R, dtype=float)
+        rb = np.asarray(r, dtype=float)
+        Rb, rb = np.broadcast_arrays(Rb, rb)
+        pts = np.column_stack([Rb.ravel(), rb.ravel()])
+        return model.predict(pts).reshape(Rb.shape)
+    return V

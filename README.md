@@ -5,6 +5,22 @@
 > ⚠️ 这是研究/教学原型，不是经过认证的科学计算软件。定量使用前请阅读
 > [功能边界与已知限制](#功能边界与已知限制) 与 [RELEASE_VALIDATION.md](RELEASE_VALIDATION.md)。
 
+## v0.8.0 亮点: 电子结构后端与训练数据生成 (实验性)
+
+- **统一 `Calculator` 协议**: 能量 (Hartree) + 核梯度 (Hartree/Bohr);
+  实现 Analytic / XTB (子进程) / PySCF / ASE 适配器 + 内置 LJ 演示;
+- **几何采样**: 笛卡尔位移网格 + 最小距离过滤 → 训练集 (npz, 带
+  provenance);
+- **CLI 闭环**: `autoquantum backends` → `sample` → `fit` → 代理面;
+- **诚实边界**: 真实后端在发布环境未安装、未验证; 采样特征无置换
+  对称性。详见 [book 第 3.6 节](book/chapters/03-势能面.md)。
+
+```bash
+autoquantum backends                              # 后端可用性
+autoquantum sample --backend demo --input ref.xyz -o data.npz
+autoquantum fit --data data.npz -o model.pkl --force-weight 1.0
+```
+
 ## v0.7.0 亮点: 能量反卷积、收敛检查与教材
 
 - **多宽度扫描 + 能量反卷积**: 恢复点值 T(E) (病态反问题 — 返回
@@ -139,8 +155,10 @@ autoquantum/
 
 ## 功能边界与已知限制
 
-- **从头算 PES 未实现**: `AbInitioData` 为数据容器 + 可调用函数采样器
-  (`sample_function`, 带中心差分梯度), 无 ASE/PySCF 后端。
+- **从头算 PES (v0.8.0, 实验性)**: `Calculator` 协议 + XTB/PySCF/ASE
+  后端 + `sample`/`fit` CLI 闭环已实现; 真实后端在本仓库发布环境
+  **未安装、未验证**, 采样特征为笛卡尔坐标 (无置换对称性), 采样
+  非自适应。
 - **NN 拟合**: 多维输入/标准化/Adam/解析梯度/力训练已具备;
   力训练依赖解析或差分梯度来源, 从头算梯度 (ASE/PySCF) 仍缺失。
 - **NN 代理面动力学精度以 RMSE 日志为准**: 拟合误差直接传导进
@@ -163,6 +181,7 @@ autoquantum/
 - [x] 能量反卷积 + 收敛检查 (v0.7.0, 病态反问题, 带诊断)
 - [x] CLI 与 HTML 报告
 - [x] 教材 (book/, v0.7.0)
+- [x] 电子结构后端协议 + 数据生成 CLI (v0.8.0, 实验性; 真实后端未验证)
+- [ ] 主动学习/对称性特征 (等变性扩展)
 - [ ] 四原子以上复杂体系
 - [ ] GPU 加速
-- [ ] ASE/PySCF 自动数据生成 (含从头算梯度)

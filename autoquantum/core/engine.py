@@ -7,7 +7,7 @@ import numpy as np
 
 from autoquantum.pes import PESBuilder
 from autoquantum.pes.abinitio import AbInitioData
-from autoquantum.nn import NNTrainer, TrainingConfig, FeedForwardNN
+from autoquantum.nn import NNTrainer, TrainingConfig, FeedForwardNN, nn_pes_2d
 from autoquantum.dynamics import (
     QuantumScattering1D,
     QuantumReaction2D,
@@ -258,17 +258,6 @@ class AutoPipeline:
         self._results["nn_fit_rmse"] = rmse
         self._results["nn_fit_grad_rmse"] = grad_rmse
 
-    @staticmethod
-    def _nn_pes_2d(model):
-        """把多维 PESNN 包装为波包传播子需要的 V(R, r) 闭包。"""
-        def V(R, r):
-            Rb = np.asarray(R, dtype=float)
-            rb = np.asarray(r, dtype=float)
-            Rb, rb = np.broadcast_arrays(Rb, rb)
-            pts = np.column_stack([Rb.ravel(), rb.ravel()])
-            return model.predict(pts).reshape(Rb.shape)
-        return V
-
     # ------------------------------------------------------------------
     def _step_dynamics(self):
         logger.info("[3/4] Quantum Dynamics Calculation ...")
@@ -407,7 +396,7 @@ class AutoPipeline:
         # 数据驱动管线: 若启用 NN 拟合, 动力学运行在 NN 代理面上
         nn_model = self._results.get("nn_model")
         if nn_model is not None:
-            pes = self._nn_pes_2d(nn_model)
+            pes = nn_pes_2d(nn_model)
             logger.info(f"    Dynamics on NN-fitted PES "
                         f"(RMSE = {self._results.get('nn_fit_rmse', float('nan')):.3e} au)")
 
