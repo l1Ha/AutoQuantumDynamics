@@ -7,6 +7,7 @@ from autoquantum.dynamics.wavepacket_2d import (
     WavePacket2D,
     WavePacket2DPropagator,
     WavePacket2DScan,
+    energy_envelope_at,
     h3_reduced_masses,
     leps_jacobi_pes,
     leps_exchange_mask,
@@ -389,6 +390,106 @@ class TestEngineIntegration(unittest.TestCase):
             self.assertAlmostEqual(
                 float(wp.norm_t[-1] + sum(v[-1] for v in wp.absorbed.values())),
                 1.0, places=9)
+
+class TestDeconvolution(unittest.TestCase):
+    """多宽度反卷积 — 病态反问题的稳健性与诊断。"""
+
+    def test_energy_envelope_normalized(self):
+        mass_R, _ = h3_reduced_masses()
+        E = np.linspace(0.01, 0.05, 501)
+        for s in (0.4, 1.1):
+            w = energy_envelope_at(s, mass_R, -np.sqrt(2 * mass_R * 0.03), E)
+            self.assertAlmostEqual(float(np.trapezoid(w, E)), 1.0, places=3)
+            self.assertTrue(np.all(w >= 0))
+        # 更宽的包 → 能量包络更宽
+        w_narrow = energy_envelope_at(0.4, mass_R, -np.sqrt(2 * mass_R * 0.03), E)
+        w_wide = energy_envelope_at(1.1, mass_R, -np.sqrt(2 * mass_R * 0.03), E)
+        self.assertGreater(np.trapezoid(w_wide ** 2, E),
+                           np.trapezoid(w_narrow ** 2, E))
+
+    def test_recovers_analytic_threshold(self):
+        # 合成数据: 解析 logistic 阈值经三宽度包络卷积 → 反卷积应恢复
+        from autoquantum.dynamics import MultiWidthScanResult, deconvolve_reaction
+        mass_R, _ = h3_reduced_masses()
+        E = np.linspace(0.005, 0.045, 6)
+        sigmas = (0.4, 0.7, 1.1)
+        T_true = 1.0 / (1.0 + np.exp(-(E - 0.02) / 0.004))
+        E_fine = np.linspace(E.min(), E.max(), 200)
+
+        rows = []
+        T_fine = 1.0 / (1.0 + np.exp(-(E_fine - 0.02) / 0.004))
+        for s in sigmas:
+            for E_c in E:
+                w = energy_envelope_at(s, mass_R,
+                                       -np.sqrt(2 * mass_R * E_c), E_fine)
+                rows.append((E_c, float(np.trapezoid(w * T_fine, E_fine))))
+        reaction = np.array([[p for _, p in rows[i * len(E):(i + 1) * len(E)]]
+                             for i in range(len(sigmas))])
+        mw = MultiWidthScanResult(sigmas=np.array(sigmas), energies=E,
+                                  reaction=reaction, energy_spread=np.zeros_like(reaction))
+        E_fit, T_fit, cond, residual = deconvolve_reaction(mw, mass_R)
+
+        T_ref = 1.0 / (1.0 + np.exp(-(E_fit - 0.02) / 0.004))
+        rmsd = np.sqrt(np.mean((T_fit - T_ref) ** 2))
+        self.assertLess(residual, 0.05, f"合成数据残差过大: {residual:.3f}")
+        self.assertLess(rmsd, 0.05, f"反卷积恢复误差过大: {rmsd:.3f} (cond={cond:.1e})")
+
+    def test_flags_illposed_narrow_window(self):
+        # 窄窗口(包络在能量轴上高度相关) 应被条件数诊断为病态;
+        # 数据一致时残差可以很低 — 两个诊断器各司其职
+        from autoquantum.dynamics import MultiWidthScanResult, deconvolve_reaction
+        mass_R, _ = h3_reduced_masses()
+        E = np.linspace(0.03, 0.04, 4)
+        sigmas = (0.5, 0.6, 0.7)
+        reaction = np.ones((3, 4))
+        mw = MultiWidthScanResult(sigmas=np.array(sigmas), energies=E,
+                                  reaction=reaction, energy_spread=np.zeros_like(reaction))
+        E_fit, T_fit, cond, residual = deconvolve_reaction(mw, mass_R)
+        self.assertGreater(cond, 1e6, "窄窗口预期病态 (条件数诊断)")
+
+    def test_residual_flags_inconsistent_data(self):
+        # 与任何平滑 T(E) 都不相容的交替数据 → 高残差 (失配诊断)
+        from autoquantum.dynamics import MultiWidthScanResult, deconvolve_reaction
+        mass_R, _ = h3_reduced_masses()
+        E = np.linspace(0.005, 0.045, 6)
+        sigmas = (0.4, 0.7, 1.1)
+        reaction = np.array([[0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+                             [1.0, 0.0, 1.0, 0.0, 1.0, 0.0],
+                             [0.0, 1.0, 0.0, 1.0, 0.0, 1.0]])
+        mw = MultiWidthScanResult(sigmas=np.array(sigmas), energies=E,
+                                  reaction=reaction, energy_spread=np.zeros_like(reaction))
+        E_fit, T_fit, cond, residual = deconvolve_reaction(mw, mass_R)
+        self.assertGreater(residual, 0.3,
+                           f"交替失配数据应给出高残差, 实得 {residual:.3f}")
+
+
+class TestConvergenceHelper(unittest.TestCase):
+    def test_refined_settings_agree_on_separable_system(self):
+        from autoquantum.dynamics import check_convergence
+        from autoquantum.pes.eckart import EckartBarrierPES
+
+        mass_R, mass_r = h3_reduced_masses()
+        params = {"V0": 0.015, "beta": 1.5, "k_r": 0.5,
+                  "r0": 1.401, "coupling": 0.0}
+        pes2d = EckartBarrierPES(params)
+
+        def make_prop(n_R, n_r, dt):
+            return WavePacket2DPropagator(
+                pes2d.evaluate, np.linspace(0.5, 9.0, n_R),
+                np.linspace(0.5, 3.5, n_r), mass_R, mass_r, dt,
+                cap_edges=("R_min", "R_max"), cap_width_frac=0.15,
+                cap_height=0.15)
+
+        packet = WavePacket2D(
+            R0=6.0, r0=1.401, sigma_R=0.5,
+            sigma_r=harmonic_ground_width(params["k_r"], mass_r),
+            p_R0=-np.sqrt(2.0 * mass_R * 0.04))
+        conv = check_convergence(
+            make_prop, packet, n_R=128, n_r=64, dt=0.5, n_steps=3000,
+            product_mask=eckart_product_mask(2.0), product_edges=("R_min",),
+            reactant_mask=lambda R, r: np.asarray(R) >= 2.0)
+        self.assertLess(conv["abs_diff"], 0.03,
+                        f"基线/加密设置偏差过大: {conv}")
 
 
 if __name__ == "__main__":

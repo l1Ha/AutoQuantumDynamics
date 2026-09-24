@@ -80,6 +80,14 @@ def main():
         "--no-gif", action="store_true",
         help="波包方法不生成 GIF 动画",
     )
+    run_parser.add_argument(
+        "--wp-deconvolve", action="store_true",
+        help="多宽度能量反卷积 (恢复 T(E); 病态反问题, 运行时报告残差)",
+    )
+    run_parser.add_argument(
+        "--wp-convergence", action="store_true",
+        help="传播收敛检查 (基线 vs 加密网格/时间步)",
+    )
 
     info_parser = sub.add_parser("info", help="显示系统信息")
     info_parser.add_argument(
@@ -117,6 +125,8 @@ def _run_pipeline(args):
         wp_scan_points=args.wp_points,
         wp_n_steps=args.wp_steps,
         wp_save_gif=not args.no_gif,
+        wp_deconvolve=args.wp_deconvolve,
+        wp_check_convergence=args.wp_convergence,
         output_dir=output,
     )
 

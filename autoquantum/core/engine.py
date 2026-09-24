@@ -16,6 +16,10 @@ from autoquantum.dynamics import (
     WavePacket2D,
     WavePacket2DPropagator,
     WavePacket2DScan,
+    MultiWidthScanResult,
+    multi_width_scan,
+    deconvolve_reaction,
+    check_convergence,
     DEFAULT_MASS_H,
     h3_reduced_masses,
     leps_jacobi_pes,
@@ -79,6 +83,11 @@ class PipelineConfig:
     wp_sigma_R: float = 0.5
     wp_scan_points: int = 6
     wp_save_gif: bool = True
+    # 能量反卷积: 多宽度扫描 + 曲率正则最小二乘恢复 T(E)
+    # (病态反问题 — 仅在传播充分且残差小时可信; 运行时记录残差)
+    wp_deconvolve: bool = False
+    # 传播收敛检查: 基线 vs 加密设置, 记录 |ΔP_react|
+    wp_check_convergence: bool = False
 
     output_dir: str = "output"
     generate_dashboard: bool = True
@@ -451,6 +460,47 @@ class AutoPipeline:
         self._results["wp_final_reaction"] = wp_result.final_reaction_probability
         logger.info(f"    Single-packet E={E_mid:.4f} au: "
                     f"P_react={wp_result.final_reaction_probability:.4f}")
+
+        # 传播收敛检查 (基线 vs 加密网格/时间步)
+        if cfg.wp_check_convergence:
+            def make_prop(n_R, n_r, dt):
+                return WavePacket2DPropagator(
+                    pes, np.linspace(*R_range, n_R), np.linspace(*r_range, n_r),
+                    mass_R, mass_r, dt, cap_edges=cap_edges,
+                    cap_width_frac=cap_frac, cap_height=0.15)
+
+            conv = check_convergence(
+                make_prop, packet, cfg.wp_n_R, cfg.wp_n_r, cfg.wp_dt,
+                cfg.wp_n_steps, product_mask, product_edges,
+                reactant_mask=reactant_mask)
+            self._results["wp_convergence"] = conv
+            logger.info(f"    Convergence check: P_react "
+                        f"{conv['baseline_p_react']:.4f} -> "
+                        f"{conv['refined_p_react']:.4f} "
+                        f"(Δ={conv['abs_diff']:.4f})")
+            if conv["abs_diff"] > 0.02:
+                logger.warning("    加密设置下 P_react 变化 >0.02: 传播未收敛, "
+                               "定量使用前请增大 wp_n_steps/网格")
+
+        # 能量反卷积 (多宽度扫描 → 曲率正则恢复 T(E))
+        if cfg.wp_deconvolve:
+            logger.info("    Energy deconvolution (multi-width scan) ...")
+            sigmas = (0.4, 0.7, 1.1)
+            mw = multi_width_scan(
+                prop, packet, product_mask, product_edges,
+                e_min, e_max, max(5, cfg.wp_scan_points),
+                sigmas=sigmas, reactant_mask=reactant_mask,
+                n_steps=cfg.wp_n_steps)
+            E_dec, T_dec, cond, residual = deconvolve_reaction(mw, mass_R)
+            self._results["wp_deconv"] = (E_dec, T_dec)
+            self._results["wp_deconv_meta"] = {"cond": cond,
+                                              "residual": residual,
+                                              "sigmas": sigmas}
+            logger.info(f"    Deconvolved T(E): cond(A)={cond:.2e}, "
+                        f"relative residual={residual:.4f}")
+            if residual > 0.1:
+                logger.warning("    反卷积残差 >0.1 (数据与包络模型失配或病态): "
+                               "T(E) 曲线仅作诊断, 建议增大 wp_n_steps/扩展能量窗口")
 
     def _step_dynamics_1d_wavepacket(self):
         """一维含时波包 (Split-Operator + CAP)。"""

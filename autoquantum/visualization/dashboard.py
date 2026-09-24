@@ -101,6 +101,13 @@ class DashboardGenerator:
                 except Exception as exc:  # GIF 生成失败不阻塞主流程
                     print(f"  [warn] wavepacket.gif 生成失败: {exc}")
 
+        if "wp_deconv" in self.results:
+            E_dec, T_dec = self.results["wp_deconv"]
+            DynamicsPlotter.plot_transmission(
+                E_dec, T_dec,
+                save_path=os.path.join(self.output_dir,
+                                       "wavepacket_deconv.png"))
+
         if "wavepacket_result_1d" in self.results:
             times, psi_all = self.results["wavepacket_result_1d"]
             grid = self.results["dynamics_result"].grid
@@ -153,7 +160,8 @@ class DashboardGenerator:
                       "pes_contour.png", "reaction_profile.png",
                       "transmission.png",
                       "wavepacket_snapshots.png", "wavepacket_probability.png",
-                      "wavepacket_1d.png", "wavepacket.gif"]
+                      "wavepacket_deconv.png", "wavepacket_1d.png",
+                      "wavepacket.gif"]
         for img in candidates:
             path = os.path.join(img_dir, img)
             if os.path.exists(path):
