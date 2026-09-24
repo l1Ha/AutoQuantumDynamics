@@ -463,6 +463,163 @@ class WavePacket2DScan:
 
 
 # ---------------------------------------------------------------------------
+# 能量分辨率、多宽度扫描与反卷积
+# ---------------------------------------------------------------------------
+
+@dataclass
+class MultiWidthScanResult:
+    """多包宽度扫描结果。
+
+    ``reaction[i, j]`` = 第 i 个宽度 (sigma_R[i]) 在碰撞能
+    ``energies[j]`` 处测得的反应概率。有限宽度波包测的是能量平均
+    ``∫|ã(E′)|²T(E′)dE′`` 而非点值 T(E); 用多个宽度联合可反卷积出
+    T(E) 的近似 (见 ``deconvolve_reaction``)。
+    """
+
+    sigmas: np.ndarray              # (n_w,) 包振幅宽度
+    energies: np.ndarray            # (m,) 碰撞能 (E = p²/2μ_R)
+    reaction: np.ndarray            # (n_w, m) 各宽度的反应概率
+    energy_spread: np.ndarray       # (n_w, m) 能量分辨率 σ_E ≈ p·σ_p/μ
+
+
+def energy_envelope_at(sigma_R: float, mass_R: float,
+                       p_center: float, energies: np.ndarray) -> np.ndarray:
+    """给定中心动量 p_center 的波包, 其入射能量包络 w(E) (∫w dE = 1)。
+
+    |ã(k)|² ∝ exp(-(k-p₀)²/σ_k²), σ_k = 1/(√2·σ_R); 变量代换
+    E = k²/2μ_R (k < 0 向左传播), w(E) = |ã(k(E))|·|dk/dE|。
+    """
+    E = np.maximum(np.asarray(energies, dtype=float), 1e-14)
+    sigma_k = 1.0 / (np.sqrt(2.0) * sigma_R)
+    k = -np.sqrt(2.0 * mass_R * E)
+    w = np.exp(-((k - p_center) / sigma_k) ** 2)
+    w *= np.sqrt(mass_R / (2.0 * E))               # |dk/dE|
+    w /= np.trapezoid(w, E)
+    return w
+
+
+def multi_width_scan(prop: WavePacket2DPropagator, packet: WavePacket2D,
+                     product_mask: Callable,
+                     product_edges: Tuple[str, ...],
+                     energy_min: float, energy_max: float, n_points: int,
+                     sigmas=(0.3, 0.5, 0.8),
+                     reactant_mask: Optional[Callable] = None,
+                     n_steps: int = 2400) -> MultiWidthScanResult:
+    """用多个包宽度重复扫描, 获得能量平均响应矩阵 (反卷积的输入)。
+
+    注意每个扫描点的波包以该点能量为中心 (p₀ = -√(2μ_R·E)),
+    因此反卷积响应包含扫描点平移 (见 ``deconvolve_reaction``)。
+    """
+    from dataclasses import replace
+
+    sigmas = np.asarray(sigmas, dtype=float)
+    energies = np.linspace(energy_min, energy_max, n_points)
+    reaction = np.zeros((sigmas.size, n_points))
+    spread = np.zeros((sigmas.size, n_points))
+
+    for i, s in enumerate(sigmas):
+        scan = WavePacket2DScan(prop, replace(packet, sigma_R=float(s)),
+                                product_mask, product_edges,
+                                reactant_mask=reactant_mask, n_steps=n_steps)
+        res = scan.run(energy_min, energy_max, n_points)
+        reaction[i] = res.reaction_prob
+        p = np.sqrt(2.0 * prop.mass_R * energies)
+        spread[i] = p / (np.sqrt(2.0) * s) / prop.mass_R
+
+    return MultiWidthScanResult(sigmas=sigmas, energies=energies,
+                                reaction=reaction, energy_spread=spread)
+
+
+def deconvolve_reaction(mw: MultiWidthScanResult, mass_R: float,
+                        n_fine: int = 200, curvature: float = 0.1,
+                        ridge: float = 1e-8
+                        ) -> Tuple[np.ndarray, np.ndarray, float, float]:
+    """多宽度反卷积: 最小二乘拟合 T(E) (分段线性基 + 曲率正则化)。
+
+    扫描点 j 的波包以 E_j 为中心, 测得
+
+        p_ij = ∫ w_i(E; E_j)·T(E) dE ≈ Σ_k M_ijk T_k,
+        M_ijk = w_i(E_k; E_j)·ΔE  (细网格上的线性 hat 基近似)
+
+    将所有 (宽度, 扫描点) 行堆叠后解带正则的最小二乘
+
+        (AᵀA + λ_D·D₂ᵀD₂ + λ_r·I) T = Aᵀ p
+
+    其中 D₂ 为二阶差分 (惩罚曲率, 对 T(E) 的台阶形状比 L2 幅值
+    正则更自然)。反卷积本质病态 (不同宽度包络在能量轴上高度相关,
+    cond(A) 可达 1e15+), 输出是带先验假设的估计量而非点值真解。
+
+    **数据前提**: 测得的 p 必须与包络模型一致 — 有限传播时间下低能
+    慢分量未完成会引入系统偏差, 并被病态性放大为振荡。请先用
+    ``check_convergence`` 确认传播充分, 并检查返回的相对残差;
+    残差大时反卷积曲线不可信 (应视为诊断指标而非结果)。
+
+    返回 (E_fine, T_fine, cond(A), 相对残差 ‖AT-p‖/‖p‖);
+    T 裁剪到 [0, 1]。
+    """
+    E_fine = np.linspace(mw.energies.min(), mw.energies.max(), n_fine)
+    dE = E_fine[1] - E_fine[0]
+
+    rows = []
+    p_rows = []
+    for i, s in enumerate(mw.sigmas):
+        for j, E_c in enumerate(mw.energies):
+            p_c = -np.sqrt(2.0 * mass_R * E_c)
+            w = energy_envelope_at(float(s), mass_R, p_c, E_fine)
+            rows.append(w * dE)
+            p_rows.append(mw.reaction[i, j])
+    A = np.vstack(rows)
+    p = np.array(p_rows)
+
+    AtA = A.T @ A
+    D2 = np.zeros((n_fine - 2, n_fine))
+    for i in range(n_fine - 2):
+        D2[i, i:i + 3] = [1.0, -2.0, 1.0]
+    # 增广最小二乘 [A; √λ·D₂] 而非正规方程 (AᵀA 会平方条件数,
+    # cond(A) ~1e9 时正规方程触及 float64 噪声底并产生 0/1 振荡)
+    M = np.vstack([A, np.sqrt(curvature) * D2])
+    rhs = np.concatenate([p, np.zeros(D2.shape[0])])
+    T, *_ = np.linalg.lstsq(M, rhs, rcond=None)
+    T = np.clip(T, 0.0, 1.0)
+
+    residual = float(np.linalg.norm(A @ T - p)
+                     / max(np.linalg.norm(p), 1e-12))
+    cond = float(np.linalg.cond(A))
+    return E_fine, T, cond, residual
+
+
+def check_convergence(make_propagator: Callable, packet: WavePacket2D,
+                      n_R: int, n_r: int, dt: float, n_steps: int,
+                      product_mask: Callable, product_edges: Tuple[str, ...],
+                      reactant_mask: Optional[Callable] = None,
+                      refine=(1.25, 1.25, 1.5, 1.3)) -> Dict[str, float]:
+    """传播收敛性检查: 基线设置 vs 加密设置。
+
+    ``make_propagator(n_R, n_r, dt)`` 返回同一体系/初态网格的传播子;
+    ``refine = (n_R 因子, n_r 因子, dt 除数, 步数因子)``, 时长保持
+    不变 (n_steps 同时放大)。返回两个设置的最终反应概率、存活
+    概率及其差值 — 定量使用前应使 ``abs_diff`` 小于目标误差。
+    """
+    results = {}
+    for name, (sR, sr, sdt, ssteps) in (("baseline", (1.0, 1.0, 1.0, 1.0)),
+                                         ("refined", refine)):
+        prop = make_propagator(int(round(n_R * sR)), int(round(n_r * sr)),
+                               dt / sdt)
+        steps = int(round(n_steps * ssteps))
+        psi0 = packet.initialize(prop.R_grid, prop.r_grid)
+        res = prop.propagate(psi0, steps, save_every=max(1, steps // 8),
+                             product_mask=product_mask,
+                             product_edges=product_edges,
+                             reactant_mask=reactant_mask,
+                             save_density=False)
+        results[f"{name}_p_react"] = float(res.reaction_prob[-1])
+        results[f"{name}_norm"] = float(res.norm_t[-1])
+    results["abs_diff"] = abs(results["refined_p_react"]
+                               - results["baseline_p_react"])
+    return results
+
+
+# ---------------------------------------------------------------------------
 # H + H₂ 体系辅助 (物理单位)
 # ---------------------------------------------------------------------------
 
