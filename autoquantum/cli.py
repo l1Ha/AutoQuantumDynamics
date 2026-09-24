@@ -95,12 +95,67 @@ def main():
         help="体系名称",
     )
 
+    sample_parser = sub.add_parser(
+        "sample", help="用电子结构后端生成 NN 训练数据 (npz)")
+    sample_parser.add_argument(
+        "--backend", default="demo",
+        choices=["demo", "analytic", "xtb", "pyscf", "ase"],
+        help="电子结构后端 (demo=内置 LJ 演示, 非量子化学)",
+    )
+    sample_parser.add_argument(
+        "--input", required=True, help="参考几何 XYZ 文件 (Bohr)")
+    sample_parser.add_argument(
+        "-o", "--output", default="data.npz", help="输出数据集 (.npz)")
+    sample_parser.add_argument(
+        "--n-per-dim", type=int, default=5, help="每维采样点数")
+    sample_parser.add_argument(
+        "--range", type=float, nargs=2, default=[-0.4, 0.4],
+        help="笛卡尔位移范围 (Bohr)")
+    sample_parser.add_argument(
+        "--active-atoms", type=int, nargs="+", default=None,
+        help="参与位移的原子序号 (默认全部)")
+    sample_parser.add_argument(
+        "--axes", type=int, nargs="+", default=[0, 1, 2],
+        help="参与位移的坐标轴 (0/1/2)")
+    sample_parser.add_argument(
+        "--min-distance", type=float, default=1.2,
+        help="最小原子间距过滤 (Bohr)")
+    sample_parser.add_argument(
+        "--max-points", type=int, default=5000, help="采样点上限")
+    sample_parser.add_argument("--charge", type=int, default=0,
+                               help="总电荷 (xtb/pyscf)")
+    sample_parser.add_argument("--uhf", type=int, default=0,
+                               help="未成对电子数 (xtb)")
+
+    fit_parser = sub.add_parser(
+        "fit", help="在数据集 (npz) 上训练 NN 势能代理面")
+    fit_parser.add_argument("--data", required=True, help="数据集 (.npz)")
+    fit_parser.add_argument("-o", "--output", default="model.pkl",
+                            help="输出模型 (.pkl)")
+    fit_parser.add_argument("--epochs", type=int, default=800)
+    fit_parser.add_argument("--lr", type=float, default=0.005)
+    fit_parser.add_argument("--layers", type=int, nargs="+",
+                            default=[64, 64, 32])
+    fit_parser.add_argument("--force-weight", type=float, default=1.0,
+                            help="力训练权重 (0=纯能量拟合)")
+    fit_parser.add_argument("--max-train-points", type=int, default=6000)
+    fit_parser.add_argument("--no-gif", action="store_true",
+                            help=argparse.SUPPRESS)
+
+    sub.add_parser("backends", help="列出电子结构后端可用性")
+
     args = parser.parse_args()
 
     if args.command == "run":
         return _run_pipeline(args)
     elif args.command == "info":
         return _show_info(args)
+    elif args.command == "sample":
+        return _sample_data(args)
+    elif args.command == "fit":
+        return _fit_nn(args)
+    elif args.command == "backends":
+        return _show_backends()
     else:
         parser.print_help()
 
@@ -155,6 +210,95 @@ def _run_pipeline(args):
     print()
     print(pipeline.summary())
     return pipeline
+
+
+def _read_xyz(path: str):
+    """解析简单 XYZ 文件 (坐标按文件原样视为 Bohr)。"""
+    with open(path) as f:
+        lines = [ln.strip() for ln in f if ln.strip()]
+    n = int(lines[0].split()[0])
+    symbols, coords = [], []
+    for ln in lines[2:2 + n]:
+        parts = ln.split()
+        symbols.append(parts[0])
+        coords.append([float(x) for x in parts[1:4]])
+    return symbols, coords
+
+
+def _sample_data(args):
+    import numpy as np
+    from autoquantum.pes.calculators import make_calculator
+    from autoquantum.pes.abinitio import AbInitioData
+
+    symbols, coords = _read_xyz(args.input)
+    print(f"参考几何: {len(symbols)} 原子 ({' '.join(symbols)})")
+
+    kwargs = {}
+    if args.backend in ("xtb", "pyscf"):
+        kwargs = {"charge": args.charge}
+        if args.backend == "xtb":
+            kwargs["uhf"] = args.uhf
+    calc = make_calculator(args.backend, symbols=symbols, **kwargs)
+    print(f"后端: {calc.name} {calc.provenance}")
+
+    data = AbInitioData.sample_geometries(
+        calc, np.asarray(coords), ranges=(tuple(args.range),),
+        n_per_dim=args.n_per_dim, active_atoms=args.active_atoms,
+        axes=args.axes, min_distance=args.min_distance,
+        max_points=args.max_points, verbose=True)
+    data.save_npz(args.output)
+    print(f"已保存 {data.n_points} 个构型 → {args.output}")
+    print(f"能量范围: [{data.energies.min():.6f}, {data.energies.max():.6f}] Hartree")
+    return 0
+
+
+def _fit_nn(args):
+    import numpy as np
+    from autoquantum.pes.abinitio import AbInitioData
+    from autoquantum.nn import NNTrainer, TrainingConfig
+    from autoquantum.nn.model import PESNN
+
+    data = AbInitioData.load_npz(args.data)
+    prov = getattr(data, "provenance", None)
+    if prov:
+        print(f"数据来源: {prov}")
+    print(f"训练点: {data.n_points}, 特征维度: {data.points.shape[1]}")
+
+    dY = data.gradients if (args.force_weight > 0
+                            and data.gradients is not None) else None
+    if dY is not None:
+        # 几何梯度 (n, N_atoms, 3) → 与展平笛卡尔特征 (n, 3N) 对齐
+        dY = np.asarray(dY).reshape(dY.shape[0], -1)
+    if args.force_weight > 0 and dY is None:
+        print("  [warn] 数据集无梯度, 退化为纯能量拟合")
+
+    config = TrainingConfig(hidden_layers=args.layers, epochs=args.epochs,
+                            lr=args.lr, force_weight=args.force_weight,
+                            max_train_points=args.max_train_points)
+    model, history = NNTrainer(config).train(data.points, data.energies, dY=dY)
+
+    pred = model.predict(data.points)
+    rmse = float(np.sqrt(np.mean((pred - data.energies) ** 2)))
+    span = float(data.energies.max() - data.energies.min())
+    print(f"能量 RMSE: {rmse:.3e} Hartree ({rmse / span * 100:.2f}% of span)")
+    if data.gradients is not None:
+        g_ref = np.asarray(data.gradients).reshape(data.gradients.shape[0], -1)
+        g_rmse = float(np.sqrt(np.mean(
+            (model.gradient(data.points) - g_ref) ** 2)))
+        print(f"梯度 RMSE: {g_rmse:.3e} Hartree/Bohr")
+
+    PESNN(model).save(args.output)
+    print(f"模型已保存 → {args.output}")
+    print("用法: from autoquantum.nn.model import PESNN; "
+          "model = PESNN.load(path); model.predict(points)")
+    return 0
+
+
+def _show_backends():
+    import json
+    from autoquantum.pes.calculators import available_calculators
+    print(json.dumps(available_calculators(), indent=2, ensure_ascii=False))
+    return 0
 
 
 def _show_info(args):

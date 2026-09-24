@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.8.0 — 电子结构后端与训练数据生成 (实验性)
+
+完成"从头算 → 拟合 → 动力学"闭环的数据入口: 从电子结构程序
+采集 (能量, 梯度) 训练集, 训练力训练代理面。
+
+### Added
+
+- **`pes/calculators.py` 统一后端协议** `Calculator` (能量 Hartree +
+  核梯度 Hartree/Bohr, 与动力学模块同一单位制):
+  - `AnalyticCalculator` (含中心差分回退) 与内置 `demo_calculator`
+    (LJ 演示, 明确非量子化学; 让整条 CLI 闭环在零依赖环境可验证);
+  - `XTBCommandCalculator` (子进程 GFN-xTB `--grad` + 正则解析),
+    `PySCFCalculator` (RHF/UHF/ROHF/KS), `ASECalculatorAdapter`
+    (任意 ASE calculator, ∇E = -F) — 均为**实验性**;
+  - `available_calculators()` 可用性报告, `make_calculator()` 工厂;
+    provenance (程序/版本/基组/电荷/自旋) 随数据集保存。
+- **几何采样** `AbInitioData.sample_geometries`: 笛卡尔位移网格
+  (active_atoms × axes, ranges 单元素广播, 最小原子间距过滤,
+  max_points 子采样) → (points, energies, gradients) + provenance;
+  `save_npz`/`load_npz` 数据集持久化。
+- **CLI**: `autoquantum backends` (后端可用性), `autoquantum sample`
+  (XYZ 参考几何 → 数据集), `autoquantum fit` (数据集 → NN 代理面,
+  报告能量/梯度 RMSE)。
+- `nn_pes_2d` 提升为公共 API: 训练好的 2D 代理面可直接喂给
+  `WavePacket2DPropagator` (engine 内部改用同一包装器)。
+- 测试: 后端协议/FD 梯度/采样器/CLI 闭环 — 共 53 项。
+
+### 诚实边界
+
+- 真实量子化学后端 (xtb/pyscf/ase) 在本仓库发布验证环境**未安装、
+  未经端到端验证**; 其数值正确性由所调程序与设置决定, 本仓库不做
+  认证。可验证部分是协议、采样管线与 demo 闭环 (演示实测: 能量
+  RMSE 0.32% span, 梯度 RMSE 2.4×10⁻³ Hartree/Bohr)。
+- 采样特征为**展平笛卡尔坐标** (n, 3N): 无置换/旋转等变性, 同核
+  体系需自行扩展 (见 3.6 节与第 10 章)。
+- 采样为均匀位移网格, 非自适应/主动学习 (接口位置已预留)。
+
 ## 0.7.0 — 能量反卷积、收敛检查与配套教材
 
 ### Added
