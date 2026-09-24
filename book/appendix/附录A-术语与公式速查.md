@@ -119,4 +119,31 @@
 | 概率守恒 | $\sum_i|\psi_i|^2\Delta x+\sum_eL_e=1$ | CAP 测试；二维使用 $\Delta R\Delta r$。 |
 | 误差与采样 | $\mathrm{RMSE}=\sqrt{N^{-1}\sum_i(y_i-\hat y_i)^2}$ | engine 对 NN 面报告 `nn_fit_rmse`、梯度 RMSE；动力学不能只看训练 MSE。 |
 
-相关章节：数学与单位见“01 数学预备”；波包实现和风险见“附录B”；概念定义和公式来源可回看 `knowledge_base/*.md`。
+## A.3 电子结构术语补充 (第 4 章)
+
+| 术语 (中/英) | 含义 | 本仓库关联 |
+|---|---|---|
+| 基组 / basis set | 用有限个高斯基函数线性组合展开分子轨道; `sto-3g`, `cc-pVDZ` | `PySCFCalculator(basis=...)` |
+| 高斯基函数 / Gaussian basis function | $\phi_{ijk}=N x^iy^jz^k e^{-\alpha r^2}$ 及其球谐组合 | 第 4 章 4.2 节 |
+| 收缩基组 / contracted | 多个原语高斯基组合为一个"轨道"; STO-3G = 3 个高斯基近似一个 Slater 轨道 | 第 4 章 |
+| 弥散函数 / diffuse function | 大 $\alpha$ 指数的小尾函数, 阴离子/长程相互作用必需 | 第 4 章 7 节 |
+| BSSE / 基组叠加误差 | 用有限单体外壳计算二聚体时人为降低结合能 | 采样数据解读; 见第 4 章 |
+| Slater 行列式 / Slater determinant | 电子波函数反对称化的行列式表示 | 第 4 章 4.1 节 |
+| 变分原理 | $\delta\langle H\rangle=0$ 给出基组内最优波函数 | 第 4 章 4.1 节 |
+| 哈特里-福克 / Hartree–Fock (HF) | 单 Slater 行列式的自洽场方法, 精确交换 | `method='rhf'/'uhf'/'rohf'` |
+| Fock 矩阵 / Fock matrix | $F=h+G$, Roothaan–Hall 的核心算符矩阵 | 第 4 章 4.3 节 |
+| Roothaan–Hall 方程 | $FC=SC\varepsilon$ 广义特征值问题, SCF 迭代求不动点 | `PySCFCalculator._mf` |
+| 自洽场 / SCF | 轨道→密度→Fock→轨道 循环至收敛 | `mf.converged` 检查 |
+| 密度泛函 / DFT | 用电子密度代替波函数; Hohenberg–Konn 定理 | `method='dft'` |
+| Kohn–Sham 方程 | 用辅助非相互作用体系在有效势下求解 | 第 4 章 4.4 节 |
+| 交换-相关泛函 / XC functional | $E_{xc}[n]$ 的近似 (LDA/GGA); 直接影响 NN 标签 | provenance 记录 |
+| 半经验方法 / semi-empirical | 参数化的电子哈密顿量 (GFN-xTB), 大体系快速 | `XTBCommandCalculator` |
+| xTB | 扩展紧束缚半经验方法; `--chrg/--uhf/--acc` 参数 | `XTBCommandCalculator.__init__` |
+| Hellmann–Feynman | 基组固定时 $\partial E/\partial R=\langle\psi|\partial H/\partial R|\psi\rangle$ | 梯度来源; `energy_and_gradient` |
+| Pulay 力 | 基组依赖时需变分导数修正; Gaussian 程序自动处理 | 第 4 章高手专栏 |
+| 核排斥能 / nuclear repulsion | 几何能量中的 $Z_AZ_B/R_{AB}$ 项, 与电子能合并才是总能量 | 梯度与力的定义 |
+| 电荷/多重度 / charge, multiplicity | 电子数与自旋态; 填错会得到错误势能面 | `--charge/--uhf/spin` |
+| 力 vs 梯度 | $\mathbf{F}=-\nabla_R E$ (ASE 返回力, 本项目取负号得梯度) | `ASECalculatorAdapter` |
+| 零点能 / ZPE | 谐振零点能, **不在**电子能量/力中; 振动态 PES 需另行加和 | NN 面继承纯电子面 |
+
+相关章节：电子结构见“04 电子结构基础”；数学与单位见“01 数学预备”；波包实现和风险见“附录B”；概念定义和公式来源可回看 `knowledge_base/*.md`。
