@@ -5,6 +5,24 @@
 > ⚠️ 这是研究/教学原型，不是经过认证的科学计算软件。定量使用前请阅读
 > [功能边界与已知限制](#功能边界与已知限制) 与 [RELEASE_VALIDATION.md](RELEASE_VALIDATION.md)。
 
+## v0.11.0 亮点: 对称函数势能面与委员会不确定性
+
+- **对称函数描述符** (`nn/symmetry.py`): Behler-Parrinello 径向+角度
+  函数, 逐原子中心, 严格平移/旋转不变;
+- **共享原子能量委员会** (`nn/ensemble.py`): E = Σᵢ E_atom(Φᵢ) —
+  原子置换按构造严格不变 (H2 交换等), 同种原子共享参数;
+- **OOD 不确定性**: 委员会标准差作为主动学习采样信号;
+- CLI: `autoquantum fit --data d.npz --symmetry --committee 4`
+  (数据集含 (n,3N) 坐标与 symbols);
+- 测试: 对称性物理正确性 (置换/平移/旋转不变) + 委员会学习/OOD, 共
+  85 项。
+
+```python
+from autoquantum.nn.ensemble import train_atomic_committee
+committee, info = train_atomic_committee(symbols, coords, energies, n_models=4)
+E, sigma = committee.predict_with_uncertainty(coords)  # sigma 越大越 OOD
+```
+
 ## 工程质量基线 (v0.10.0)
 
 - **输入验证**: 网格/能量窗/势能有限性 fail-fast (`core/validation.py`)

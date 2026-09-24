@@ -113,3 +113,38 @@ class TestCLIDataPipeline(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCLISymmetryFit(unittest.TestCase):
+    """CLI fit --symmetry: 置换不变委员会端到端。"""
+
+    def test_symmetry_committee_cli(self):
+        import sys
+        import numpy as np
+        from autoquantum.cli import main
+        from autoquantum.nn.ensemble import AtomicEnergyCommittee
+
+        rng = np.random.RandomState(0)
+        n = 40
+        base = np.array([[0.0, 0.0, 0.0], [1.43, 1.11, 0.0],
+                         [-1.43, 1.11, 0.0]])
+        c = np.repeat(base[None], n, axis=0) + rng.normal(0, 0.05,
+                                                           (n, 3, 3))
+        d = c[:, :, None, :] - c[:, None, :, :]
+        r2 = np.maximum((d ** 2).sum(-1), 1e-6)
+        iu = np.triu_indices(3, k=1)
+        E = (0.35 / r2[:, iu[0], iu[1]]).sum(axis=1)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            npz = os.path.join(tmp, "d.npz")
+            pkl = os.path.join(tmp, "c.pkl")
+            np.savez(npz, points=c.reshape(n, 9), energies=E,
+                     symbols=np.array(["O", "H", "H"]))
+            sys.argv = ["autoquantum", "fit", "--data", npz, "-o", pkl,
+                       "--symmetry", "--committee", "2", "--epochs", "1200"]
+            self.assertEqual(main(), 0)
+            self.assertTrue(os.path.exists(pkl))
+            com = AtomicEnergyCommittee.load(pkl)
+            pred = com.predict(c)
+            self.assertLess(float(np.sqrt(np.mean((pred - E) ** 2))),
+                            0.6 * float(E.std()))
