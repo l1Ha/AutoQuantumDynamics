@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.10.0 — 工程硬化: 验证、可复现与 CI
+
+把项目从"能跑的研究原型"推向科学计算软件标准: 输入验证、结果可信度
+诊断、运行可复现凭证、持续集成与性能基线。
+
+### Added
+
+- **`core/validation.py` 输入验证层**: `validate_grid` (严格等距/有限/
+  单调)、`validate_energy_window`、`validate_pes_values` (NaN/发散墙)、
+  `validate_positive`; 失败抛 `ValidationError` 并附修复提示 (fail fast)。
+- **传播健康诊断** `check_propagation`: 概率记账恒等式、通道和、末态
+  未吸收比例 (传播不足/CAP 太弱)、NaN、能量漂移; engine 每次波包运行
+  后自动执行 (`wp_health_check`, 默认开)。
+- **能量监测**: `WavePacket2DPropagator.energy_expectation` + 
+  `propagate(track_energy=True)` → `energy_track / energy_drift_rel`;
+  自由演化守恒到 1e-8 (测试固定)。
+- **运行清单** `run_manifest.json` (每次运行自动): 完整配置 + 环境快照
+  (python/numpy/scipy/matplotlib/autoquantum/git commit) + 结果摘要 +
+  PES 数据 SHA-256 指纹 — 结果可复现的凭证。
+- **训练卡**: NN 训练自动记录数据指纹/规模/RMSE/超参/环境, 随 `.pkl`
+  持久化 (`PESNN.training_card`), 模型文件自解释训练来源。
+- **`suggest_dt`**: c/E_max 步长相位精度建议, engine 在 dt 过大时告警。
+- **实验模块护栏**: `allow_experimental=False` 时显式拒绝 2D 定态求解器。
+- **CI** (`.github/workflows/ci.yml`): ubuntu+macos × py3.11-3.13 测试
+  矩阵 + 导入冒烟 + 配图测试 + wheel 构建; TeX Live 教材构建作业。
+- **`scripts/check.sh`** 本地质量闸门; **`scripts/benchmark.py`** 可复现
+  微基准 (参考: 96×64 网格 ~2800 波包步/秒, NN 每轮 ~34 ms, Apple M4)。
+- 测试新增 19 项, 共 75 项。
+
+### Fixed
+
+- `write_run_manifest` 对 Python 3.14 局部类的反射兼容 (3.14 下
+  `isinstance(C, type)` 与 `bool(C.__dict__)` 均不可靠)。
+- `PESNN` 重复包装护栏 (CLI 双重包装导致 save 报错)。
+
 ## 0.9.1 — 教材正式定名与 PDF 出版
 
 - **书名确定**: 《从势能面到波包——分子反应动力学的量子理论、数值验证与代码实践》(AutoQuantum 项目组, v0.9.1); 书名落实于封面、索引与前言扉页。

@@ -5,6 +5,24 @@
 > ⚠️ 这是研究/教学原型，不是经过认证的科学计算软件。定量使用前请阅读
 > [功能边界与已知限制](#功能边界与已知限制) 与 [RELEASE_VALIDATION.md](RELEASE_VALIDATION.md)。
 
+## 工程质量基线 (v0.10.0)
+
+- **输入验证**: 网格/能量窗/势能有限性 fail-fast (`core/validation.py`)
+- **可信度闸门**: 每次波包运行自动输出健康诊断 — 概率记账、通道和、
+  未吸收比例、NaN、能量漂移; 告警直达日志
+- **可复现**: `run_manifest.json` (配置+环境+git commit+结果+数据指纹);
+  NN 模型自带训练卡 (数据 SHA-256/RMSE/超参)
+- **实验性护栏**: 2D 定态求解器需显式 `allow_experimental=True`
+- **持续集成**: ubuntu/macos × py3.11-3.13 测试矩阵 + wheel 构建
+  (`.github/workflows/ci.yml`); 本地 `bash scripts/check.sh`
+- **性能基线**: `python scripts/benchmark.py` (参考: 96×64 网格约
+  2800 波包步/秒; NN 每轮约 34 ms, Apple M4)
+
+```bash
+bash scripts/check.sh              # 本地全量质量闸门
+python scripts/benchmark.py        # 微基准 (含 --quick)
+```
+
 ## v0.8.0 亮点: 电子结构后端与训练数据生成 (实验性)
 
 - **统一 `Calculator` 协议**: 能量 (Hartree) + 核梯度 (Hartree/Bohr);
