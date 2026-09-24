@@ -90,7 +90,8 @@ class NNTrainer:
         if cfg.normalize:
             x_mean = X_train.mean(axis=0)
             x_scale = X_train.std(axis=0)
-            x_scale = np.where(x_scale == 0, 1.0, x_scale)
+            # 近常数维度不参与缩放 (否则标准化后数值爆炸)
+            x_scale = np.where(x_scale < 1e-12, 1.0, x_scale)
             y_mean = float(y_train.mean())
             y_scale = float(y_train.std()) or 1.0
             model.set_normalization(x_mean, x_scale, y_mean, y_scale)
@@ -119,15 +120,12 @@ class NNTrainer:
         use_adam = self.config.adam_beta1 > 0
         if force and not use_adam:
             print("  [warn] adam_beta1=0 (朴素梯度下降) 不支持力训练, 力目标被忽略")
-        t = 0
-        mW = [np.zeros_like(w) for w in model.weights]
-        vW = [np.zeros_like(w) for w in model.weights]
-        mB = [np.zeros_like(b) for b in model.biases]
-        vB = [np.zeros_like(b) for b in model.biases]
-        b1, b2, eps = (cfg.adam_beta1, cfg.adam_beta2, cfg.adam_eps)
+        from autoquantum.nn.optim import Adam
+        opt = Adam([w.shape for w in model.weights] + [b.shape for b in model.biases],
+                   lr=cfg.lr, beta1=cfg.adam_beta1, beta2=cfg.adam_beta2,
+                   eps=cfg.adam_eps)
 
         def adam_step(Xb, yb, tb=None):
-            nonlocal t
             activations, zs = model.forward(Xb)
             dw, db = model._backward(Xb, yb, activations, zs)
             if force and tb is not None:
@@ -137,18 +135,7 @@ class NNTrainer:
                 dwf, dbf = model.input_gradient_backward(Xb, adj)
                 dw = [a + b_ for a, b_ in zip(dw, dwf)]
                 db = [a + b_ for a, b_ in zip(db, dbf)]
-            t += 1
-            for i in range(len(model.weights)):
-                mW[i] = b1 * mW[i] + (1 - b1) * dw[i]
-                vW[i] = b2 * vW[i] + (1 - b2) * dw[i] ** 2
-                mB[i] = b1 * mB[i] + (1 - b1) * db[i]
-                vB[i] = b2 * vB[i] + (1 - b2) * db[i] ** 2
-                mhat = mW[i] / (1 - b1 ** t)
-                vhat = vW[i] / (1 - b2 ** t)
-                model.weights[i] -= cfg.lr * mhat / (np.sqrt(vhat) + eps)
-                mhat_b = mB[i] / (1 - b1 ** t)
-                vhat_b = vB[i] / (1 - b2 ** t)
-                model.biases[i] -= cfg.lr * mhat_b / (np.sqrt(vhat_b) + eps)
+            opt.step(model.weights + model.biases, dw + db)
 
         for epoch in range(cfg.epochs):
             if cfg.batch_size > 0:

@@ -139,6 +139,12 @@ def main():
     fit_parser.add_argument("--force-weight", type=float, default=1.0,
                             help="力训练权重 (0=纯能量拟合)")
     fit_parser.add_argument("--max-train-points", type=int, default=6000)
+    fit_parser.add_argument(
+        "--symmetry", action="store_true",
+        help="对称函数+共享原子能量模式: 数据集需含 (n,3N) points 与 symbols, "
+             "输出置换严格不变的委员会势能面")
+    fit_parser.add_argument("--committee", type=int, default=4,
+                            help="委员会成员数 (--symmetry, 默认 4)")
     fit_parser.add_argument("--no-gif", action="store_true",
                             help=argparse.SUPPRESS)
 
@@ -259,6 +265,9 @@ def _fit_nn(args):
     from autoquantum.nn.model import PESNN
 
     data = AbInitioData.load_npz(args.data)
+    if args.symmetry:
+        return _fit_symmetry_committee(args, data)
+
     prov = getattr(data, "provenance", None)
     if prov:
         print(f"数据来源: {prov}")
@@ -266,6 +275,66 @@ def _fit_nn(args):
 
     dY = data.gradients if (args.force_weight > 0
                             and data.gradients is not None) else None
+    if dY is not None and dY.shape != data.points.shape:
+        dY = np.asarray(dY).reshape(dY.shape[0], -1)  # (n,N,3) → (n,3N)
+    if args.force_weight > 0 and dY is None:
+        print("  [warn] 数据集无梯度, 退化为纯能量拟合")
+
+    config = TrainingConfig(hidden_layers=args.layers, epochs=args.epochs,
+                            lr=args.lr, force_weight=args.force_weight,
+                            max_train_points=args.max_train_points)
+    model, history = NNTrainer(config).train(data.points, data.energies, dY=dY)
+
+    pred = model.predict(data.points)
+    rmse = float(np.sqrt(np.mean((pred - data.energies) ** 2)))
+    span = float(data.energies.max() - data.energies.min())
+    print(f"能量 RMSE: {rmse:.3e} Hartree ({rmse / span * 100:.2f}% of span)")
+    if data.gradients is not None:
+        g_ref = np.asarray(data.gradients).reshape(data.gradients.shape[0], -1)
+        g_rmse = float(np.sqrt(np.mean(
+            (model.gradient(data.points) - g_ref) ** 2)))
+        print(f"梯度 RMSE: {g_rmse:.3e} Hartree/Bohr")
+
+    model.save(args.output)
+    print(f"模型已保存 → {args.output}")
+    print("用法: from autoquantum.nn.model import PESNN; "
+          "model = PESNN.load(path); model.predict(points)")
+    return 0
+
+
+def _fit_symmetry_committee(args, data):
+    """对称函数 + 共享原子能量委员会 (置换/平移/旋转严格不变)。"""
+    import numpy as np
+    from autoquantum.nn.ensemble import (train_atomic_committee,
+                                         AtomicTrainingConfig)
+    from autoquantum.nn.symmetry import SymmetryFunctionParams
+
+    if data.points.ndim != 2 or data.points.shape[1] % 3 != 0:
+        raise SystemExit("--symmetry 需要 (n, 3N) 笛卡尔坐标数据集")
+    symbols = list(data.symbols) if getattr(data, "symbols", None) else None
+    if not symbols or len(symbols) * 3 != data.points.shape[1]:
+        raise SystemExit("--symmetry 需要数据集内含 symbols (元素序列, 长度 N)")
+    coords = data.points.reshape(-1, len(symbols), 3)
+    print(f"对称函数模式: {len(symbols)} 原子 {symbols}, "
+          f"{coords.shape[0]} 构型, 委员会 {args.committee} 成员")
+    committee, info = train_atomic_committee(
+        symbols, coords, data.energies, n_models=args.committee,
+        config=AtomicTrainingConfig(epochs=args.epochs),
+        seed=0)
+    print(f"总能量 RMSE: {info['rmse']:.3e} Hartree "
+          f"(特征维度 {info['n_features']}/中心)")
+    committee.save(args.output)
+    print(f"委员会已保存 → {args.output} (置换不变, OOD 不确定性: committee.std(coords))")
+    return 0
+    prov = getattr(data, "provenance", None)
+    if prov:
+        print(f"数据来源: {prov}")
+    print(f"训练点: {data.n_points}, 特征维度: {data.points.shape[1]}")
+
+    dY = data.gradients if (args.force_weight > 0
+                            and data.gradients is not None) else None
+    if dY is not None and dY.shape != data.points.shape:
+        dY = np.asarray(dY).reshape(dY.shape[0], -1)  # (n,N,3) → (n,3N)
     if dY is not None:
         # 几何梯度 (n, N_atoms, 3) → 与展平笛卡尔特征 (n, 3N) 对齐
         dY = np.asarray(dY).reshape(dY.shape[0], -1)

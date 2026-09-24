@@ -171,6 +171,9 @@ class AbInitioData:
         arrays = {"points": self.points, "energies": self.energies}
         if self.gradients is not None:
             arrays["gradients"] = self.gradients
+        symbols = getattr(self, "symbols", None)
+        if symbols is not None:
+            arrays["symbols"] = np.array(list(symbols))
         prov = provenance or getattr(self, "provenance", None)
         if prov:
             arrays["provenance_json"] = np.array(json.dumps(prov))
@@ -190,6 +193,8 @@ class AbInitioData:
                 data.provenance = json.loads(str(f["provenance_json"]))
             if "geometry" in f:
                 data.geometry = f["geometry"]
+            if "symbols" in f:
+                data.symbols = [str(x) for x in f["symbols"]]
         return data
 
     def split(self, train_ratio: float = 0.8) -> Tuple["AbInitioData", "AbInitioData"]:
