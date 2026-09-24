@@ -287,7 +287,7 @@ def _fit_nn(args):
             (model.gradient(data.points) - g_ref) ** 2)))
         print(f"梯度 RMSE: {g_rmse:.3e} Hartree/Bohr")
 
-    PESNN(model).save(args.output)
+    model.save(args.output)
     print(f"模型已保存 → {args.output}")
     print("用法: from autoquantum.nn.model import PESNN; "
           "model = PESNN.load(path); model.predict(points)")

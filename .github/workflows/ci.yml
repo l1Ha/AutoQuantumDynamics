@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+      - name: Import smoke
+        run: python -c "import autoquantum; print(autoquantum.__version__)"
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Figure smoke
+        run: python -m unittest tests.test_book_figures -v
+      - name: Wheel build
+        run: |
+          python -m pip install build
+          python -m build --wheel
+
+  book:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Book build (TeX Live)
+        run: |
+          sudo apt-get update && sudo apt-get install -y texlive-xetex texlive-lang-chinese texlive-latex-extra
+          python scripts/make_book_figures.py --smoke
+          python scripts/md2tex_book.py
+          cd book/build
+          xelatex -interaction=nonstopmode book.tex >/dev/null
+          xelatex -interaction=nonstopmode book.tex >/dev/null
+          test -f book.pdf
+          echo "book.pdf built: $(stat -c%s book.pdf) bytes"

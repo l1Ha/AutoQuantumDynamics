@@ -31,6 +31,16 @@ from autoquantum.dynamics import (
     TransmissionProbability,
     ReflectionProbability,
 )
+from autoquantum.core.validation import (
+    ValidationError,
+    check_propagation,
+    data_fingerprint,
+    suggest_dt,
+    validate_energy_window,
+    validate_grid,
+    validate_pes_values,
+    write_run_manifest,
+)
 from autoquantum.visualization import DashboardGenerator
 from autoquantum.pes.leps import LEPSBuilder
 from autoquantum.pes.eckart import EckartBuilder
@@ -88,6 +98,12 @@ class PipelineConfig:
     wp_deconvolve: bool = False
     # 传播收敛检查: 基线 vs 加密设置, 记录 |ΔP_react|
     wp_check_convergence: bool = False
+    # 传播后运行健康诊断 (守恒/吸收/能量漂移), 超阈值告警
+    wp_health_check: bool = True
+    # 允许使用实验性模块 (2D 定态求解器); False 时显式拒绝
+    allow_experimental: bool = True
+    # 全局随机种子 (可复现); None = 不固定
+    seed: Optional[int] = None
 
     output_dir: str = "output"
     generate_dashboard: bool = True
@@ -104,16 +120,44 @@ class AutoPipeline:
                 or self.config.pes_type in ("leps", "eckart"))
 
     def run(self) -> Dict[str, Any]:
+        if self.config.seed is not None:
+            np.random.seed(self.config.seed)
         logger.info("=" * 60)
         logger.info(f"AutoQuantum Pipeline: {self.config.system_name} "
-                    f"(method={self.config.method})")
+                    f"(method={self.config.method}, seed={self.config.seed})")
         logger.info("=" * 60)
 
         self._step_build_pes()
         self._step_nn_fit()
         self._step_dynamics()
         self._step_visualize()
+        self._write_manifest()
         return self._results
+
+    def _write_manifest(self):
+        """写运行清单: 配置+环境+结果摘要 (可复现性凭证)。"""
+        import os
+        summary: Dict[str, Any] = {}
+        r = self._results.get("dynamics_result")
+        if r is not None:
+            summary["max_transmission"] = float(np.max(r.transmission))
+            summary["energy_range"] = [float(r.energy[0]), float(r.energy[-1])]
+        if "wp_final_reaction" in self._results:
+            summary["wavepacket_P_react"] = self._results["wp_final_reaction"]
+        if "nn_fit_rmse" in self._results:
+            summary["nn_fit_rmse"] = self._results["nn_fit_rmse"]
+        if "nn_fit_grad_rmse" in self._results:
+            summary["nn_fit_grad_rmse"] = self._results["nn_fit_grad_rmse"]
+        if "pes_2d_data_hash" in self._results:
+            summary["pes_2d_data_hash"] = self._results["pes_2d_data_hash"]
+        try:
+            os.makedirs(self.config.output_dir, exist_ok=True)
+            path = write_run_manifest(
+                os.path.join(self.config.output_dir, "run_manifest.json"),
+                self.config, summary)
+            self._results["run_manifest"] = path
+        except OSError as exc:
+            logger.warning(f"运行清单写入失败: {exc}")
 
     # ------------------------------------------------------------------
     def _step_build_pes(self):
@@ -165,6 +209,7 @@ class AutoPipeline:
         self._results["pes_2d"] = builder
         self._results["pes_2d_grid"] = (R_grid, r_grid, V_grid)
         self._results["pes_2d_ranges"] = (R_range, r_range)
+        self._results["pes_2d_data_hash"] = data_fingerprint(R_grid, r_grid, V_grid)
 
     def _step_nn_fit(self):
         if not self.config.use_nn_fit:
@@ -224,6 +269,7 @@ class AutoPipeline:
             ranges=[R_range, r_range], n_per_dim=150,
         )
         X, y = data.points, data.energies
+        validate_pes_values("2D PES 训练标签", y)
 
         config = TrainingConfig(
             hidden_layers=self.config.nn_hidden_layers,
@@ -274,6 +320,10 @@ class AutoPipeline:
                 self._step_dynamics_1d_wavepacket()
         elif method == "stationary":
             if self.is_2d:
+                if not self.config.allow_experimental:
+                    raise ValidationError(
+                        "2D 时间无关求解器为实验性 (无通道耦合/未做流归一化, "
+                        "不可作定量结论); 如仅作演示请设 allow_experimental=True")
                 logger.warning("    2D 时间无关求解器为实验性 (无通道耦合/未做流归一化), "
                                "结果仅作定性参考")
                 self._step_dynamics_2d()
@@ -294,6 +344,7 @@ class AutoPipeline:
         builder = self._results["pes_builder"]
         pes = model if model is not None else builder
 
+        validate_energy_window(self.config.energy_min, self.config.energy_max)
         solver = QuantumScattering1D(
             mass=self.config.mass,
             pes=pes,
@@ -402,25 +453,36 @@ class AutoPipeline:
 
         R_grid = np.linspace(*R_range, cfg.wp_n_R)
         r_grid = np.linspace(*r_range, cfg.wp_n_r)
+        validate_grid("R_grid", R_grid)
+        validate_grid("r_grid", r_grid)
         prop = WavePacket2DPropagator(
             pes, R_grid, r_grid, mass_R, mass_r, dt=cfg.wp_dt,
             cap_edges=cap_edges, cap_width_frac=cap_frac, cap_height=0.15,
         )
+        # 势能面有限性门控 (NN 面爆炸/解析面发散时立即失败)
+        validate_pes_values("2D PES", prop.V)
+        dt_suggest = suggest_dt(prop.V, prop.dR, prop.dr, mass_R, mass_r)
+        if cfg.wp_dt > 2 * dt_suggest:
+            logger.warning(
+                f"    dt={cfg.wp_dt} 超过相位精度建议上限 ~{2 * dt_suggest:.3g} "
+                "(c/E_max 启发式); 建议减小 dt 或做收敛检查")
         packet = WavePacket2D(R0=R0, r0=r0,
                               sigma_R=cfg.wp_sigma_R, sigma_r=sigma_r)
 
         # 初态-CAP 重叠检查: 过大说明网格/CAP 配置不当, 结果不可信
         overlap = prop.check_initial_overlap(packet.initialize(R_grid, r_grid))
         if overlap > 1e-4:
-            raise RuntimeError(
+            raise ValidationError(
                 f"初始波包与 CAP 重叠概率 {overlap:.2e} 过大 (>1e-4): "
                 "请增大网格范围或减小 cap_width_frac")
         if overlap > 1e-5:
             logger.warning(f"    初始波包与 CAP 重叠概率 {overlap:.2e} (建议 <1e-5)")
 
         logger.info(f"    2D wavepacket: grid {cfg.wp_n_R}x{cfg.wp_n_r}, "
-                    f"dt={cfg.wp_dt}, steps={cfg.wp_n_steps}")
+                    f"dt={cfg.wp_dt}, steps={cfg.wp_n_steps} "
+                    f"(dt_suggest≈{dt_suggest:.3g})")
 
+        validate_energy_window(e_min, e_max, require_positive=True)
         # 能量扫描 → 与时间无关扫描接口兼容
         scan = WavePacket2DScan(
             prop, packet, product_mask, product_edges,
@@ -438,6 +500,7 @@ class AutoPipeline:
             psi0, cfg.wp_n_steps, save_every=save_every,
             product_mask=product_mask, product_edges=product_edges,
             reactant_mask=reactant_mask, save_density=True,
+            track_energy=cfg.wp_health_check,
         )
         wp_result.energy = np.array([E_mid])
 
@@ -449,6 +512,15 @@ class AutoPipeline:
         self._results["wp_final_reaction"] = wp_result.final_reaction_probability
         logger.info(f"    Single-packet E={E_mid:.4f} au: "
                     f"P_react={wp_result.final_reaction_probability:.4f}")
+
+        # 传播健康诊断 (守恒/吸收/能量漂移) — 结果可信度第一道闸门
+        if cfg.wp_health_check:
+            health = check_propagation(
+                wp_result, energy_drift_rel=wp_result.energy_drift_rel)
+            self._results["wp_health"] = health
+            logger.info(f"    Health: {health.summary()}")
+            for w in health.warnings:
+                logger.warning(f"    [health] {w}")
 
         # 传播收敛检查 (基线 vs 加密网格/时间步)
         if cfg.wp_check_convergence:

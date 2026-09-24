@@ -274,19 +274,22 @@ class FeedForwardNN:
             self.weights[i] -= lr * dw[i]
             self.biases[i] -= lr * db[i]
 
-    def save(self, path: str):
+    def save(self, path: str, extra: Optional[dict] = None):
         import pickle
+        payload = {
+            "layers": self.layers,
+            "activation": self.activation_name,
+            "weights": self.weights,
+            "biases": self.biases,
+            "x_mean": self.x_mean,
+            "x_scale": self.x_scale,
+            "y_mean": self.y_mean,
+            "y_scale": self.y_scale,
+        }
+        if extra:
+            payload.update(extra)
         with open(path, "wb") as f:
-            pickle.dump({
-                "layers": self.layers,
-                "activation": self.activation_name,
-                "weights": self.weights,
-                "biases": self.biases,
-                "x_mean": self.x_mean,
-                "x_scale": self.x_scale,
-                "y_mean": self.y_mean,
-                "y_scale": self.y_scale,
-            }, f)
+            pickle.dump(payload, f)
 
     @classmethod
     def load(cls, path: str) -> "FeedForwardNN":
@@ -301,14 +304,26 @@ class FeedForwardNN:
         model.x_scale = data.get("x_scale")
         model.y_mean = data.get("y_mean")
         model.y_scale = data.get("y_scale")
+        model.training_card = data.get("training_card", {})
         return model
 
 
 class PESNN:
-    """势能面代理模型: 支持一维 (n,) 与二维 (n, d) 物理单位调用。"""
+    """势能面代理模型: 支持一维 (n,) 与二维 (n, d) 物理单位调用。
 
-    def __init__(self, model: FeedForwardNN):
+    模型携带 ``training_card`` (训练元数据: 数据指纹/RMSE/超参/
+    autoquantum 版本), 随 save/load 持久化 — 模型文件自解释其训练来源。
+    """
+
+    def __init__(self, model: FeedForwardNN,
+                 training_card: Optional[dict] = None):
+        if isinstance(model, PESNN):      # 防重复包装
+            training_card = training_card or model.training_card
+            model = model.model
         self.model = model
+        self.training_card: dict = (
+            training_card if training_card is not None
+            else getattr(model, "training_card", {}) or {})
 
     def evaluate(self, x: np.ndarray) -> np.ndarray:
         return self.model.predict(x)
@@ -324,11 +339,12 @@ class PESNN:
         return self.evaluate(x)
 
     def save(self, path: str):
-        self.model.save(path)
+        self.model.save(path, extra={"training_card": self.training_card})
 
     @classmethod
     def load(cls, path: str) -> "PESNN":
-        return cls(FeedForwardNN.load(path))
+        model = FeedForwardNN.load(path)
+        return cls(model, getattr(model, "training_card", {}))
 
 
 def nn_pes_2d(model: PESNN):

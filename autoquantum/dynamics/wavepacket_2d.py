@@ -113,7 +113,10 @@ class WavePacket2DResult:
     reactant_population: np.ndarray          # 反应物区布居 P_react_ch(t)
     reaction_prob: np.ndarray                # 通道估计 P_react(t)
     reflection_prob: np.ndarray              # 通道估计 P_refl(t)
-    energy: Optional[np.ndarray] = None      # 标注用能量数组 (绘图接口)
+    energy_track: Optional[np.ndarray] = None   # track_energy=True 时为 ⟨H⟩(t)
+    energy_drift_rel: Optional[float] = None    # |⟨H⟩-⟨H⟩₀|/|⟨H⟩₀|
+    energy_reference: Optional[float] = None
+    metadata: Optional[Dict[str, object]] = None
 
     @property
     def transmission(self) -> np.ndarray:
@@ -300,12 +303,40 @@ class WavePacket2DPropagator:
         return float(p2[cap_cells].sum())
 
     # ------------------------------------------------------------------
+    def _k_arrays(self):
+        kR = 2 * np.pi * np.fft.fftfreq(self.n_R, self.dR)[:, None]
+        kr = 2 * np.pi * np.fft.fftfreq(self.n_r, self.dr)[None, :]
+        return kR, kr
+
+    def energy_expectation(self, psi: np.ndarray) -> float:
+        """⟨H⟩ = ⟨T⟩ + ⟨V⟩ (Hartree), k 空间动能 + 实空间势能。
+
+        T 与 V 不对易, split-operator 传播中 ⟨H⟩ 会有 O(dt²) 级漂移;
+        该量作为传播可信度诊断 (见 core.validation.check_propagation)。
+        """
+        psi = np.asarray(psi, dtype=complex)
+        kR, kr = self._k_arrays()
+        g = self.g_matrix
+        psi_k = np.fft.fft2(psi)
+        t_k = 0.5 * (g[0, 0] * kR ** 2
+                     + 2.0 * g[0, 1] * kR * kr
+                     + g[1, 1] * kr ** 2)
+        rho_k = np.abs(psi_k) ** 2
+        rho_x = np.abs(psi) ** 2
+        if rho_k.sum() <= 0 or rho_x.sum() <= 0:
+            return float("nan")
+        t_mean = float(np.sum(t_k * rho_k) / np.sum(rho_k))   # Parseval: dV 抵消
+        v_mean = float(np.sum(self.V * rho_x) / np.sum(rho_x))
+        return t_mean + v_mean
+
+    # ------------------------------------------------------------------
     def propagate(self, psi0: np.ndarray, n_steps: int,
                   save_every: int = 10,
                   product_mask: Optional[Callable] = None,
                   product_edges: Tuple[str, ...] = (),
                   reactant_mask: Optional[Callable] = None,
-                  save_density: bool = True) -> WavePacket2DResult:
+                  save_density: bool = True,
+                  track_energy: bool = False) -> WavePacket2DResult:
         """传播波包并记录通道概率随时间的演化。
 
         Parameters
@@ -341,6 +372,7 @@ class WavePacket2DPropagator:
                                  "通道记账要求二者互斥")
 
         snapshots = np.zeros((n_save, self.n_R, self.n_r)) if save_density else None
+        energies = np.zeros(n_save) if track_energy else None
         norm_t = np.zeros(n_save)
         prod_pop = np.zeros(n_save)
         react_pop = np.zeros(n_save)
@@ -358,6 +390,8 @@ class WavePacket2DPropagator:
                 absorbed[e][k] = cumulative[e]
             if save_density:
                 snapshots[k] = np.abs(psi) ** 2
+            if track_energy:
+                energies[k] = self.energy_expectation(psi)
 
         record(0, psi)
         for i in range(1, n_steps + 1):
@@ -372,6 +406,12 @@ class WavePacket2DPropagator:
         reflection = react_pop + sum(absorbed[e] for e in self.cap_edges
                                      if e not in product_edges)
 
+        drift = None
+        reference = None
+        if track_energy and energies[0] != 0:
+            reference = float(energies[0])
+            drift = float(np.max(np.abs(energies - energies[0]))) / abs(reference)
+
         return WavePacket2DResult(
             R_grid=self.R_grid,
             r_grid=self.r_grid,
@@ -384,6 +424,9 @@ class WavePacket2DPropagator:
             reactant_population=react_pop,
             reaction_prob=reaction,
             reflection_prob=reflection,
+            energy_track=energies,
+            energy_drift_rel=drift,
+            energy_reference=reference,
         )
 
     # ------------------------------------------------------------------

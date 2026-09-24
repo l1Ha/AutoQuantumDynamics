@@ -193,4 +193,31 @@ class NNTrainer:
             model.weights, model.biases = best_state
 
         pes_nn = PESNN(model)
+        # 训练卡: 模型文件自解释其训练来源 (科学计算软件硬要求)
+        from autoquantum.core.validation import data_fingerprint, environment_info
+        import datetime
+        full_pred = pes_nn.predict(X)
+        pes_nn.training_card = {
+            "created_utc": datetime.datetime.now(
+                datetime.timezone.utc).isoformat(timespec="seconds"),
+            "n_points": int(n),
+            "input_dim": int(d),
+            "data_sha256": data_fingerprint(
+                X, y, dY if dY is not None else np.zeros(0)),
+            "force_used": bool(dY is not None and cfg.force_weight > 0),
+            "epochs_run": len(self.history["train_loss"]),
+            "rmse_full": float(np.sqrt(np.mean((full_pred - y) ** 2))),
+            "val_loss_best": float(best_val_loss),
+            "hyperparameters": {
+                "hidden_layers": list(cfg.hidden_layers),
+                "activation": cfg.activation,
+                "lr": cfg.lr,
+                "train_split": cfg.train_split,
+                "batch_size": cfg.batch_size,
+                "seed": cfg.seed,
+                "force_weight": cfg.force_weight,
+                "normalize": cfg.normalize,
+            },
+            "environment": environment_info(),
+        }
         return pes_nn, self.history
