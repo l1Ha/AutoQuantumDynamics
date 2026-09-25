@@ -5,6 +5,22 @@
 > ⚠️ 这是研究/教学原型，不是经过认证的科学计算软件。定量使用前请阅读
 > [功能边界与已知限制](#功能边界与已知限制) 与 [RELEASE_VALIDATION.md](RELEASE_VALIDATION.md)。
 
+## 远程计算 (c211 集群)
+
+服务器: `target-server` (xb002, 经 `login-server` 跳转) — 192 核 EPYC
+9654 / 755G 内存 / A100-40GB / Python 3.12。已部署 venv `~/aqd-venv`
+与代码 `~/AutoQuantum` (85 项测试在服务器全绿)。
+
+```bash
+bash scripts/remote.sh sync                 # 同步代码 (tar over ssh)
+bash scripts/remote.sh test                 # 服务器跑测试
+bash scripts/remote.sh run scripts/benchmark.py --quick
+bash scripts/remote.sh fetch /storage/home/lih/output_xxx   # 取回结果
+```
+
+注: 登录节点 (2 核/3.7G) 仅作跳板; GPU (A100) 加速为路线图项,
+当前栈为纯 NumPy CPU。跨平台数值差异 (BLAS) 在 0.2% 量级, 已知。
+
 ## v0.11.0 亮点: 对称函数势能面与委员会不确定性
 
 - **对称函数描述符** (`nn/symmetry.py`): Behler-Parrinello 径向+角度
