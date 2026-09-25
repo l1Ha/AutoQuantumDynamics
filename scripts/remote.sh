@@ -7,7 +7,8 @@
 #   bash scripts/remote.sh run "<命令>"      # 服务器上执行命令 (venv 内)
 #   bash scripts/remote.sh fetch <远程目录>  # 取回结果到本地 results/
 #
-# 环境 (首次部署已完成): 代码 ~/AutoQuantum, venv ~/aqd-venv
+# 环境 (已部署): 代码 ~/AutoQuantum, micromamba 环境 ~/aqd-env (跨节点一致)
+# Slurm 分区: liquid_high (xc001-016, 液冷 16x192核) / air (xa,xb,xd 风冷, xb002 有 A100)
 # 节点: target-server (c211/xb002: 192核 EPYC 9654, 755G, A100-40G)
 set -euo pipefail
 HOST="${AQD_HOST:-target-server}"
@@ -32,6 +33,30 @@ case "${1:-}" in
   run)
     shift
     ssh "$HOST" "cd ~/AutoQuantum && $R_PY $*"
+    ;;
+  submit)
+    # 用法: remote.sh submit liquid_high|air "<sbatch 脚本内容会自动生成>"
+    # 或:   remote.sh submit liquid_high myjob.sbatch
+    PART="${2:?分区: liquid_high 或 air}"
+    shift 2
+    if [ "${1:-}" ] && [ -f "${1:-}" ]; then
+      sbatch_script=$(cat "${1:-}")
+    else
+      sbatch_script=$(cat << 'EOJ'
+#!/bin/bash
+#SBATCH -N 1
+#SBATCH --time=02:00:00
+export PATH=$HOME/aqd-env/bin:$PATH
+cd $HOME/AutoQuantum
+echo "node: $(hostname)"
+python -m unittest discover -s tests 2>&1 | tail -2
+EOJ
+)
+    fi
+    echo "$sbatch_script" | sed "s/PARTITION_PLACEHOLDER/$PART/" > /tmp/aqd_job.sbatch
+    scp -q /tmp/aqd_job.sbatch "$HOST:~/aqd_job.sbatch"
+    ssh "$HOST" "sbatch ~/aqd_job.sbatch && squeue -u \$USER | head -5"
+    rm /tmp/aqd_job.sbatch
     ;;
   fetch)
     shift

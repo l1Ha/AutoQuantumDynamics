@@ -7,16 +7,27 @@
 
 ## 远程计算 (c211 集群)
 
-服务器: `target-server` (xb002, 经 `login-server` 跳转) — 192 核 EPYC
-9654 / 755G 内存 / A100-40GB / Python 3.12。已部署 venv `~/aqd-venv`
-与代码 `~/AutoQuantum` (85 项测试在服务器全绿)。
+集群 (qdmovie): 登录 `login-server`, 计算节点经 **Slurm** 投递。
+环境: `/storage/home` 全集群 NFS 共享 — micromamba 环境 `~/aqd-env`
+(Python 3.12 + numpy/scipy/matplotlib + autoquantum) 与代码
+`~/AutoQuantum` 对所有节点一致 (venv 符号链接跨 OS 镜像会失效,
+勿用)。
+
+| 分区 | 节点 | 规格 |
+|---|---|---|
+| `liquid_high` | xc001-016 (液冷) | 16 × 192 核 EPYC, MaxTime 无限 |
+| `air` | xa001-002, xb001-002, xd001 | xb002 含 A100-40GB |
 
 ```bash
-bash scripts/remote.sh sync                 # 同步代码 (tar over ssh)
-bash scripts/remote.sh test                 # 服务器跑测试
+bash scripts/remote.sh sync                        # 同步代码 (共享存储)
+bash scripts/remote.sh test                        # 当前节点跑测试
+bash scripts/remote.sh submit liquid_high          # Slurm 投递验证作业
+bash scripts/remote.sh submit air myjob.sbatch     # 投递自定义作业脚本
 bash scripts/remote.sh run scripts/benchmark.py --quick
-bash scripts/remote.sh fetch /storage/home/lih/output_xxx   # 取回结果
+bash scripts/remote.sh fetch /storage/home/lih/output_xxx
 ```
+
+已在 liquid_high (xc016) 与 air (xa002) 双分区验证: 85 项测试全绿。
 
 注: 登录节点 (2 核/3.7G) 仅作跳板; GPU (A100) 加速为路线图项,
 当前栈为纯 NumPy CPU。跨平台数值差异 (BLAS) 在 0.2% 量级, 已知。
