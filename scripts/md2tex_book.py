@@ -93,6 +93,7 @@ SYMBOL_MAP = {
     "≈": r"$\approx$", "≠": r"$\neq$", "≤": r"$\leq$", "≥": r"$\geq$",
     "×": r"$\times$", "±": r"$\pm$", "−": "$-$", "·": r"$\cdot$",
     "√": r"$\sqrt{\ }$", "⁡": "",
+    "≲": r"$\lesssim$", "≳": r"$\gtrsim$",
 }
 GREEK = {
     "α": r"$\alpha$", "β": r"$\beta$", "γ": r"$\gamma$",
@@ -114,6 +115,13 @@ MATH_SYM = {
     "×": r"\times", "±": r"\pm", "−": "-", "·": r"\cdot",
     "Δ": r"\Delta", "Σ": r"\Sigma", "∇": r"\nabla", "⁡": "",
 }
+# 代码块中的 Unicode 框线/箭头 → ASCII 等价 (等宽字体无这些字形)
+CODE_SYM = {
+    "─": "-", "│": "|", "┌": "+", "┐": "+", "└": "+", "┘": "+",
+    "├": "+", "┤": "+", "┬": "+", "┴": "+", "┼": "+",
+    "►": ">", "▼": "v", "▲": "^", "◀": "<",
+}
+
 LATEX_SPECIALS = r"\&\%\$\#\_\{\}~^<>"
 
 
@@ -159,6 +167,8 @@ def escape_plain(text: str) -> str:
 
 def code_text(raw: str) -> str:
     """代码文本 → 转义 LaTeX, 并在 / - 空格后插入断行点。"""
+    for uni, ascii_eq in CODE_SYM.items():
+        raw = raw.replace(uni, ascii_eq)
     t = escape_plain(raw)
     t = t.replace("/", r"/\allowbreak{}")
     t = t.replace("-", r"-\allowbreak{}")
