@@ -50,6 +50,12 @@ committee, info = train_atomic_committee(symbols, coords, energies, n_models=4)
 E, sigma = committee.predict_with_uncertainty(coords)  # sigma 越大越 OOD
 ```
 
+## v0.13.0 亮点: 主动学习闭环
+
+`nn/active_learning.py`: 委员会分歧选点 → Calculator 标注 → 增量训练,
+池 RMSE 随轮次下降 (测试固定 >30%); 对接真实后端 (xtb/pyscf) 即可
+生产采样。
+
 ## v0.12.0 亮点: GPU 加速 (A100 实测)
 
 - `dynamics/wavepacket_2d_torch.py`: torch 后端波包传播 (可选依赖),
