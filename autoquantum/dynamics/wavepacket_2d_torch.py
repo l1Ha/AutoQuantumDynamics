@@ -118,17 +118,28 @@ class TorchWavePacket2DPropagator:
     def step(self, psi: "torch.Tensor") -> "torch.Tensor":
         losses = np.zeros(len(self.cap_edges))
         with torch.no_grad():
+            # 损失计算顺序与 NumPy 版严格一致:
+            # p2 → exp_W_half → 算损失 → FFT → p2 → exp_W_half → 算损失
+            # (若在 FFT 后才算损失, FFT 重分配会混入 CAP 归因 → 全误归 R_min)
             if self.cap_edges:
-                p2 = (psi.abs() ** 2).cpu().numpy()
+                p2 = (psi.abs().double() ** 2).cpu().numpy()
+
             psi = self.exp_W_half * psi
-            psi = torch.fft.ifft2(self.exp_T * torch.fft.fft2(psi))
+
             if self.cap_edges:
-                p2n = (psi.abs() ** 2).cpu().numpy()
+                p2n = (psi.abs().double() ** 2).cpu().numpy()
                 losses += self._losses(p2, p2n)
                 p2 = p2n
-            psi = self.exp_W_half * psi
+
+            psi = torch.fft.ifft2(self.exp_T * torch.fft.fft2(psi))
+
             if self.cap_edges:
-                p2n = (psi.abs() ** 2).cpu().numpy()
+                p2 = (psi.abs().double() ** 2).cpu().numpy()
+
+            psi = self.exp_W_half * psi
+
+            if self.cap_edges:
+                p2n = (psi.abs().double() ** 2).cpu().numpy()
                 losses += self._losses(p2, p2n)
         self.last_absorbed = {e: float(v)
                               for e, v in zip(self.cap_edges, losses)}
@@ -145,6 +156,8 @@ class TorchWavePacket2DPropagator:
         for e in product_edges:
             if e not in self.cap_edges:
                 raise ValueError(f"product_edges 的 {e} 未启用 CAP")
+        if isinstance(psi0, np.ndarray):   # NumPy 初始化兼容 (Scan 调用)
+            psi0 = torch.as_tensor(psi0, device=self.device).to(self.tdtype)
 
         save_steps = list(range(0, n_steps + 1, save_every))
         if save_steps[-1] != n_steps:

@@ -33,6 +33,10 @@ def main():
     parser.add_argument("--grid-r", type=int, default=192)
     parser.add_argument("--grid-rv", type=int, default=144)
     parser.add_argument("--steps", type=int, default=2500)
+    parser.add_argument("--torch", action="store_true",
+                        help="使用 PyTorch 后端 (GPU: 加 dtype=float32)")
+    parser.add_argument("--dtype", default="float64",
+                        choices=["float32", "float64"])
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
 
@@ -43,10 +47,20 @@ def main():
 
     R = np.linspace(0.5, 10.0, args.grid_r)
     r = np.linspace(0.2, 9.5, args.grid_rv)
-    prop = WavePacket2DPropagator(
+    Prop = WavePacket2DPropagator
+    kw = {}
+    if args.torch:
+        from autoquantum.dynamics.wavepacket_2d_torch import (
+            TorchWavePacket2DPropagator)
+        Prop = TorchWavePacket2DPropagator
+        kw = {"dtype": args.dtype}
+        device = "cuda" if __import__("torch").cuda.is_available() else "cpu"
+        kw["device"] = device
+        print(f"[backend] torch {args.dtype} on {device}")
+    prop = Prop(
         pes, R, r, mass_R, mass_r, dt=0.5,
         cap_edges=("R_min", "R_max", "r_min", "r_max"),
-        cap_width_frac=0.05, cap_height=0.15)
+        cap_width_frac=0.05, cap_height=0.15, **kw)
     packet = WavePacket2D(
         R0=6.7, r0=1.401, sigma_R=0.5,
         sigma_r=morse_ground_width(0.1744, 1.028, mass_r))
