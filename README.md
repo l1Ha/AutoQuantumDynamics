@@ -5,6 +5,23 @@
 > ⚠️ 这是研究/教学原型，不是经过认证的科学计算软件。定量使用前请阅读
 > [功能边界与已知限制](#功能边界与已知限制) 与 [RELEASE_VALIDATION.md](RELEASE_VALIDATION.md)。
 
+## 集群生产管线 (v0.15.0)
+
+```bash
+# 一条命令: 同步代码 → Slurm 提交 → 等待完成 → 取回 → 合并 → 出图
+python scripts/production.py \
+    --system H3_2D --pes leps \
+    --e-min 0.10 --e-max 0.30 --n-points 12 \
+    --chunks 4 --grid 192 144 --steps 2500 \
+    --partition liquid_high
+
+# GPU 加速 (A100 节点, air 分区)
+python scripts/production.py --torch --dtype float32 \
+    --partition air --e-min 0.10 --e-max 0.30 --n-points 24
+```
+
+结果输出至 `results/` (npz + png)，已加入 `.gitignore`。
+
 ## 远程计算 (c211 集群)
 
 集群 (qdmovie): 登录 `login-server`, 计算节点经 **Slurm** 投递。

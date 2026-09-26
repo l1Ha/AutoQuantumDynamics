@@ -1,6 +1,25 @@
 # Changelog
 
-## 0.14.0 — 教材第 13 章 + 符号修复
+## 0.15.0 — 端到端集群生产管线
+
+### Added
+
+- **`scripts/production.py`**: 一条命令完成 配置→同步→Slurm 提交→
+  监控→取回→合并→出图。支持 `--partition liquid_high/air`、
+  `--torch` (GPU)、`--chunks N` (并行度)、`--max-wait` (0=只提交)。
+- `scripts/remote.sh` 新增 `test` (服务器测试) 和 `run` (服务器命令)
+  子命令; 修复 SSH 远端变量展开。
+- `autoquantum/py.typed` 类型检查标记。
+- `knowledge_base/README.md` (标注历史文档可能滞后)。
+- 移除过时 `scripts/sync_github.sh` (指向错误仓库且有 SSH 配置修改
+  风险); 旧 v0.9.1 PDF 从根目录清理。
+
+### Changed
+
+- `.gitignore` 新增 `results/`、`book/build/`、`从势能面到波包*.pdf`。
+- 集群作业输出自动按 Job ID 命名; 结果通过 NFS 共享存储全集群可见。
+
+## 0.14.0 — 教材第 13 章 + 符号修复 — 教材第 13 章 + 符号修复
 
 ### Added
 

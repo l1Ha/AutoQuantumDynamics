@@ -18,3 +18,8 @@ __pycache__/
 output_h2_1d/
 book/build/
 book/figures/__pycache__/
+# 生产结果 (不在 git 中, 由 remote.sh fetch 取回到本地)
+results/
+# 构建缓存
+# 旧 PDF (最新版随 Release 分发)
+从势能面到波包*.pdf
