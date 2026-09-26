@@ -148,3 +148,85 @@ class TestAtomicCommittee(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestActiveLearning(unittest.TestCase):
+    """主动学习闭环: 分歧选点 vs 随机选点。"""
+
+    def _toy(self, c):
+        c = np.asarray(c)
+        squeeze = c.ndim == 2
+        if squeeze:
+            c = c[None]
+        d = c[:, :, None, :] - c[:, None, :, :]
+        r2 = np.maximum((d ** 2).sum(-1), 1e-6)
+        iu = np.triu_indices(c.shape[1], k=1)
+        E = (0.35 / r2[:, iu[0], iu[1]]).sum(axis=1)
+        return E[0] if squeeze else E
+
+    def test_loop_reduces_pool_rmse(self):
+        from autoquantum.nn.active_learning import run_active_learning
+        from autoquantum.nn.ensemble import AtomicTrainingConfig
+        from autoquantum.pes.calculators import AnalyticCalculator
+
+        symbols = ["O", "H", "H"]
+        rng = np.random.RandomState(5)
+
+        def toy(c):
+            c = np.asarray(c)
+            sq = c.ndim == 2
+            if sq:
+                c = c[None]
+            d = c[:, :, None, :] - c[:, None, :, :]
+            r2 = np.maximum((d ** 2).sum(-1), 1e-6)
+            iu = np.triu_indices(c.shape[1], k=1)
+            E = (0.35 / r2[:, iu[0], iu[1]]).sum(axis=1)
+            return E[0] if sq else E
+
+        # 训练域 (小振幅) 与候选池 (更大振幅, 委员会最初外推)
+        c0 = _sample_geometries(16, seed=7)
+        pool = _sample_geometries(50, seed=8)
+        pool += rng.normal(0, 0.10, pool.shape)   # 更偏离初始分布
+        calc = AnalyticCalculator(toy)
+
+        result = run_active_learning(
+            symbols, calc, c0, pool, n_iterations=3, batch_size=10,
+            n_models=2,
+            training_config=AtomicTrainingConfig(hidden_layers=(24, 24),
+                                                 epochs=300),
+            sf_params=SymmetryFunctionParams(r_cut=4.0, radial_etas=(2., 5.)),
+            seed=0, verbose=False)
+
+        self.assertEqual(len(result.history), 3)
+        self.assertLess(result.history[-1]["n_labeled"],
+                        16 + 3 * 10 + 1)              # 无重复挑点
+        # 主动学习后池 RMSE 显著低于首轮 (初始标注少 + 外推区)
+        self.assertLess(result.pool_rmse_history[-1],
+                        0.7 * result.pool_rmse_history[0],
+                        f"池 RMSE 未下降: {result.pool_rmse_history}")
+        # 挑过的点不再被挑
+        picked = [j for h in result.history for j in h["picked_indices"]]
+        self.assertEqual(len(picked), len(set(picked)))
+
+    def test_loop_stops_when_pool_exhausted(self):
+        from autoquantum.nn.active_learning import run_active_learning
+        from autoquantum.nn.ensemble import AtomicTrainingConfig
+        from autoquantum.pes.calculators import AnalyticCalculator
+
+        c0 = _sample_geometries(10, seed=1)
+        pool = _sample_geometries(6, seed=2)
+        calc = AnalyticCalculator(self._toy)
+        result = run_active_learning(
+            ["O", "H", "H"], calc, c0, pool, n_iterations=5, batch_size=10,
+            n_models=2,
+            training_config=AtomicTrainingConfig(hidden_layers=(16,),
+                                                 epochs=100),
+            sf_params=SymmetryFunctionParams(r_cut=4.0, radial_etas=(2., 5.)),
+            seed=1, verbose=False)
+        self.assertLessEqual(len(result.history), 5)
+        self.assertEqual(len(result.labeled_coords),
+                         10 + 6)   # 池全部标注完即停
+
+
+if __name__ == "__main__":
+    unittest.main()
