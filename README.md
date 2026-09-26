@@ -50,6 +50,20 @@ committee, info = train_atomic_committee(symbols, coords, energies, n_models=4)
 E, sigma = committee.predict_with_uncertainty(coords)  # sigma 越大越 OOD
 ```
 
+## v0.12.0 亮点: GPU 加速 (A100 实测)
+
+- `dynamics/wavepacket_2d_torch.py`: torch 后端波包传播 (可选依赖),
+  与 NumPy 版逐项对拍验证 (fp64 ~1e-6);
+- 集群 A100-40GB 实测: 384×288 网格 **4.6× 加速** (6.4→1.4 ms/步),
+  768×576 网格 4.4× (21.0→4.8 ms/步); 已在 liquid_high/air 双分区
+  验证 88 项测试。
+
+```python
+from autoquantum.dynamics.wavepacket_2d_torch import TorchWavePacket2DPropagator
+prop = TorchWavePacket2DPropagator(pes, R, r, mass_R, mass_r, dt=0.5,
+                                   dtype="float32")   # A100 fp32 最快
+```
+
 ## 工程质量基线 (v0.10.0)
 
 - **输入验证**: 网格/能量窗/势能有限性 fail-fast (`core/validation.py`)
