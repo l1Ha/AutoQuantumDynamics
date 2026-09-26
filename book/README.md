@@ -46,4 +46,4 @@ python -m unittest discover -s tests
 
 ## 版本对应
 
-本书对应 AutoQuantum v0.9.1 (第 3.6 节含从头算后端与数据生成; 第 4 章电子结构基础; 第 6 章分子振动基础; 全书 12 张真实计算配图)。核心验证数值 (波包 vs 解析基准、力训练提升、double-backprop FD 门控) 见仓库 [RELEASE_VALIDATION.md](../RELEASE_VALIDATION.md)。
+本书对应 AutoQuantum v0.12.0 (第 12.5 节 GPU 已部分实现) (第 3.6 节含从头算后端与数据生成; 第 4 章电子结构基础; 第 6 章分子振动基础; 全书 12 张真实计算配图)。核心验证数值 (波包 vs 解析基准、力训练提升、double-backprop FD 门控) 见仓库 [RELEASE_VALIDATION.md](../RELEASE_VALIDATION.md)。

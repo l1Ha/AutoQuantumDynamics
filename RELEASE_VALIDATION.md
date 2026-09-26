@@ -1,3 +1,20 @@
+# v0.12.0 release validation (GPU 加速)
+
+## GPU 后端对拍与基准 (A100-40GB, torch 2.5.1+cu121)
+
+- **对拍** (tests/test_gpu_parity.py, 可分离 Eckart 基准, 600 步):
+  torch 后端 vs NumPy 传播子的透射率/反射率逐时刻一致 (fp64 ~1e-6),
+  概率记账恒等式与 ⟨H⟩ 同满足; 本地 CPU torch 与集群 A100 双环境通过。
+- **A100 实测基准** (LEPS 势, 含 GPU 预热):
+  384×288: NumPy 6.4 → A100 fp32 1.4 ms/步 (**4.6×**);
+  768×576: 21.0 → 4.8 ms/步 (4.4×); 192×144: ~2× (传输开销主导)。
+- 部署: `~/aqd-env` 已装 torch 2.5.1+cu121; liquid_high/air 双分区
+  85+3 项测试全绿。
+- 代码测试 88 项通过 (新增 3 项 parity); 实现中修复 3 处 CUDA 设备
+  转换 bug (仅 GPU 环境可暴露)。
+
+---
+
 # v0.9.1 release validation (教材 PDF)
 
 ## 教材构建与两轮视觉验收
