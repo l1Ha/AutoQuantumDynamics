@@ -22,6 +22,24 @@ from autoquantum.dynamics import (
     morse_ground_width, DEFAULT_MASS_H,
 )
 from autoquantum.pes.leps import LEPSBuilder
+from autoquantum.pes.eckart import EckartBuilder
+
+
+def _build_pes(pes_name: str):
+    """按名称构建势能面 (返回 V(R,r) 闭包与初始参数)。"""
+    if pes_name == "leps":
+        builder = LEPSBuilder({"D": 0.1744, "alpha": 1.028, "r0": 1.401,
+                               "sato": 0.05})
+        return leps_jacobi_pes(builder)
+    elif pes_name == "eckart":
+        builder = EckartBuilder({"V0": 0.015, "beta": 1.5, "k_r": 0.5,
+                                 "r0": 1.401, "coupling": 0.08})
+        return builder.evaluate_2d
+    elif pes_name == "morse":
+        from autoquantum.pes.analytic import MorsePES
+        m = MorsePES({"D": 0.1744, "alpha": 1.028, "r0": 0.7416})
+        return lambda R, r: m.evaluate(r)  # 仅 r 方向
+    raise ValueError(f"未知势能面: {pes_name}")
 
 
 def main():
@@ -32,6 +50,8 @@ def main():
     parser.add_argument("--part", type=int, default=0)
     parser.add_argument("--grid-r", type=int, default=192)
     parser.add_argument("--grid-rv", type=int, default=144)
+    parser.add_argument("--pes", default="leps",
+                        choices=["leps", "eckart", "morse"])
     parser.add_argument("--steps", type=int, default=2500)
     parser.add_argument("--torch", action="store_true",
                         help="使用 PyTorch 后端 (GPU: 加 dtype=float32)")
@@ -41,9 +61,7 @@ def main():
     args = parser.parse_args()
 
     mass_R, mass_r = h3_reduced_masses(DEFAULT_MASS_H)
-    builder = LEPSBuilder({"D": 0.1744, "alpha": 1.028, "r0": 1.401,
-                           "sato": 0.05})
-    pes = leps_jacobi_pes(builder)
+    pes = _build_pes(args.pes)
 
     R = np.linspace(0.5, 10.0, args.grid_r)
     r = np.linspace(0.2, 9.5, args.grid_rv)
