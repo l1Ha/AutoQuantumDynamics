@@ -65,7 +65,7 @@ if [ "{args.torch}" = "1" ]; then FLAGS="--torch --dtype {args.dtype}"; fi
 
 python scripts/cluster_scan.py \\
     --e-min $EMIN --e-max $EMAX --points {pts_per} \\
-    --grid-r {args.grid_r} --grid-rv {args.grid_rv} \\
+    --grid-r {args.grid[0]} --grid-rv {args.grid[1]} \\
     --steps {args.steps} --part $SLURM_ARRAY_TASK_ID \\
     $FLAGS \\
     --out $HOME/aqd_results/scan_part$SLURM_ARRAY_TASK_ID.npz
@@ -77,8 +77,6 @@ def main():
         description="端到端集群能量扫描管线")
     parser.add_argument("--system", default="H3_2D",
                         choices=["H3_2D"], help="体系")
-    parser.add_argument("--pes", default="leps",
-                        choices=["leps", "eckart"], help="势能面")
     parser.add_argument("--e-min", type=float, default=0.10)
     parser.add_argument("--e-max", type=float, default=0.30)
     parser.add_argument("--n-points", type=int, default=12)
@@ -176,6 +174,7 @@ def main():
 
     # 热速率常数
     if args.rates:
+        import numpy as np
         print(f"\n[extra] 热速率常数 k(T) ...")
         from autoquantum.analysis.rates import (
             thermal_rate_constant, arrhenius_fit, plot_arrhenius)
