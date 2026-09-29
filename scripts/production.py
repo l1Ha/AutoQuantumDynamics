@@ -95,6 +95,10 @@ def main():
                         help="使用 GPU (torch) 后端")
     parser.add_argument("--dtype", default="float64",
                         choices=["float32", "float64"])
+    parser.add_argument("--pes", default="leps",
+                        choices=["leps", "eckart", "morse"])
+    parser.add_argument("--rates", action="store_true",
+                        help="计算热速率常数 k(T) 与 Arrhenius 图")
     parser.add_argument("--max-wait", type=int, default=3600,
                         help="最大等待秒数 (0=只提交不等待)")
     parser.add_argument("--output-prefix", default="scan")
@@ -169,6 +173,20 @@ def main():
                     os.path.join(ROOT, "scripts", "merge_scan.py"),
                     "--parts", os.path.join(RESULTS_LOCAL, "scan_part*.npz"),
                     "--out", prefix, "--plot"], check=True, timeout=300)
+
+    # 热速率常数
+    if args.rates:
+        print(f"\n[extra] 热速率常数 k(T) ...")
+        from autoquantum.analysis.rates import (
+            thermal_rate_constant, arrhenius_fit, plot_arrhenius)
+        data = np.load(prefix + ".npz")
+        temps = np.array([200, 300, 500, 1000, 2000, 3000], dtype=float)
+        rates = thermal_rate_constant(data["energy"], data["reaction"], temps)
+        fit = arrhenius_fit(temps, rates)
+        png = prefix + "_arrhenius.png"
+        plot_arrhenius(temps, rates, fit, save_path=png)
+        print(f"  {fit.summary()}")
+        print(f"  Arrhenius 图 → {png}")
 
     print(f"\n{'=' * 60}")
     print(f"完成! 结果: {prefix}.npz / {prefix}.png")

@@ -5,6 +5,15 @@
 > ⚠️ 这是研究/教学原型，不是经过认证的科学计算软件。定量使用前请阅读
 > [功能边界与已知限制](#功能边界与已知限制) 与 [RELEASE_VALIDATION.md](RELEASE_VALIDATION.md)。
 
+## 热速率常数 (v0.16.0)
+
+```python
+from autoquantum.analysis.rates import thermal_rate_constant, arrhenius_fit
+# P(E) 来自集群扫描, 计算各温度下的 Boltzmann 加权速率常数
+k_T = thermal_rate_constant(E_grid, P_grid, temperatures=[300, 600, 1200])
+fit = arrhenius_fit(temperatures, rates)  # → Ea, log₁₀A, R²
+```
+
 ## 集群生产管线 (v0.15.0)
 
 ```bash

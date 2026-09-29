@@ -1,6 +1,27 @@
 # Changelog
 
-## 0.15.0 — 端到端集群生产管线
+## 0.16.0 — 热速率常数与多势能面生产管线
+
+### Added
+
+- **`analysis/rates.py`**: 热速率常数 k(T) — 从微观反应概率 P(E) 经
+  Boltzmann 加权积分计算约化速率常数; Arrhenius 拟合 (Ea, log₁₀A, R²);
+  Arrhenius 图生成。完成 "势能面 → NN 代理 → 散射 → P(E) → k(T) →
+  Arrhenius" 全链路。
+- **`cluster_scan.py --pes leps|eckart|morse`**: 多势能面通用接口,
+  生产管线不再硬编码 LEPS。
+- **`production.py --rates`**: 集群扫描完成后自动计算 k(T) 并生成
+  Arrhenius 图。
+- `analysis/__init__.py` 新子包。
+- 测试新增 7 项 (Boltzmann 加权/阈值行为/温度单调性/Arrhenius 恢复),
+  共 97 项。
+
+### Fixed
+
+- `ArrheniusFit.log_a` 统一为 log₁₀(A) (化学标准, 非自然对数)。
+- 阶梯函数测试阈值修正 (截断能级/kBT = 0.48 时 P ≈ 0.28 物理正确)。
+
+## 0.15.0 — 端到端集群生产管线 — 端到端集群生产管线
 
 ### Added
 
