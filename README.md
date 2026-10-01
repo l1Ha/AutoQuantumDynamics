@@ -14,6 +14,16 @@ k_T = thermal_rate_constant(E_grid, P_grid, temperatures=[300, 600, 1200])
 fit = arrhenius_fit(temperatures, rates)  # → Ea, log₁₀A, R²
 ```
 
+## QCT 准经典轨线 (v0.18.0)
+
+```python
+from autoquantum.dynamics.qct import QCTEnsemble
+ensemble = QCTEnsemble(pes, mass_R, mass_r, dt=0.5, max_steps=3000)
+result = ensemble.run(E_grid, R0=6.7, r_mean=1.401, r_sigma=sigma_r,
+                      reaction_criterion=lambda R, r: R < 1.5*r, n_traj=200)
+# result.reaction_probs — 经典极限 P_react(E), 与量子波包交叉验证
+```
+
 ## 集群生产管线 (v0.15.0)
 
 ```bash

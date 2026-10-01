@@ -1,6 +1,25 @@
 # Changelog
 
-## 0.17.0 — 代码质量与文档完善
+## 0.18.0 — QCT 准经典轨线
+
+### Added
+
+- **`dynamics/qct.py`**: QCT 模块 — Velocity Verlet 经典轨迹在
+  Born-Oppenheimer 势能面上的传播 (2D 共线 H+H₂); Wigner 分布采样
+  振动态初始条件; `QCTEnsemble` 对每个碰撞能运行 N_traj 条轨迹。
+- **力符号修复**: Velocity Verlet 中 F = −∂V/∂R (原实现误用 +∂V/∂R)。
+- **`QCTEnsemble`**: 批量轨迹运行 → P_react(E), 与波包扫描接口兼容。
+- **`wigner_sample`**: 谐振子基态 Wigner 分布采样 (正确的量子-经典对应)。
+- **QCT vs 量子验证**: 高能端一致性 + 低能端 QCT 不应高于量子 (物理合理性)。
+- 测试新增 5 项, 共 102 项。
+
+### 物理预期
+
+- 高能端 (E >> barrier): QCT ≈ 量子 (经典极限)。
+- 低能端: QCT 可能低于量子 (缺隧穿) 或高于 (Wigner 采样含 classically
+  forbidden 初始条件) — 两者均为 QCT 方法的已知系统偏差。
+
+## 0.17.0 — 代码质量与文档完善 — 代码质量与文档完善
 
 ### Added
 
