@@ -14,14 +14,19 @@ k_T = thermal_rate_constant(E_grid, P_grid, temperatures=[300, 600, 1200])
 fit = arrhenius_fit(temperatures, rates)  # → Ea, log₁₀A, R²
 ```
 
-## QCT 准经典轨线 (v0.18.0)
+## QCT 准经典轨线与量子对比 (v0.19.0)
 
 ```python
-from autoquantum.dynamics.qct import QCTEnsemble
+from autoquantum.dynamics import QCTEnsemble, QCTTrajectory, wigner_sample
 ensemble = QCTEnsemble(pes, mass_R, mass_r, dt=0.5, max_steps=3000)
 result = ensemble.run(E_grid, R0=6.7, r_mean=1.401, r_sigma=sigma_r,
                       reaction_criterion=lambda R, r: R < 1.5*r, n_traj=200)
 # result.reaction_probs — 经典极限 P_react(E), 与量子波包交叉验证
+```
+
+运行量子 vs 准经典交叉验证脚本：
+```bash
+python scripts/compare_qct_quantum.py --n-traj 200 --wp-steps 3000
 ```
 
 ## 集群生产管线 (v0.15.0)

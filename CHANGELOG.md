@@ -1,6 +1,25 @@
 # Changelog
 
-## 0.18.0 — QCT 准经典轨线
+## 0.19.0 — QCT 集成、量子对比与教材全书编译
+
+### Added
+
+- **QCT 核心导出**: 在 `autoquantum/dynamics/__init__.py` 中正式公开导出 `QCTTrajectory`、`QCTEnsemble`、`QCTResult`、`wigner_sample`。
+- **物理 Wigner 采样与反射早停**: `QCTEnsemble.run` 自动按双原子约化质量与基态振动宽度计算真实物理频率 $\omega = 1/(\mu_r \sigma_r^2)$；`QCTTrajectory.propagate` 增加 $R_{\rm refl\_threshold}$ 遇阻反射早期退出逻辑，大幅提升非反应轨线积分性能。
+- **集群生产管线深度集成 QCT**: `scripts/cluster_scan.py` 与 `scripts/production.py` 增加 `--method {wavepacket, qct}` 与 `--n-traj` 支持，支持大规模 Slurm 阵列并行化轨线系综生产。
+- **QM vs QCT 比较诊断框架**: 新增 `scripts/compare_qct_quantum.py`，实现同一势能面网格下量子波包动力学与准经典轨线动力的双向交叉基准，输出反应阈值、量子隧穿增强因子与玻尔对应极限定量对比表。
+- **教材新编两章与全量配图**:
+  - 第 14 章《准经典轨线动力学 (QCT)》：哈密顿正则方程、辛积分、Wigner 采样、经典极限与量子隧穿对比。
+  - 第 15 章《热速率常数与集群生产》：微观反应几率到宏观速率常数 $k(T)$ 的微正则/正则系综积分、Arrhenius 活化能拟合、Slurm 自动化生产管线。
+  - 新增图 `ch14_qct_vs_quantum.png`、`ch15_thermal_rates.png`，配图总数扩充至 14 幅真实计算图。
+- **教材编译升级**: 编译生成《从势能面到波包-分子反应动力学-v0.19.0.pdf》（134 页，15 章正文 + 4 附录，全面升级教学与高阶研发指引）。
+
+### Fixed
+
+- **Arrhenius 拟合自然对数转换**: 修正 `rates.py:plot_arrhenius` 中 $\log_{10} A$ 到自然对数的换算因子（$\ln A = \log_{10} A \times \ln 10$）。
+- **`QCTResult.energy_drift_max` 类型转换**: 避免特定 numpy array 格式化触发的 `TypeError`。
+
+## 0.18.0 — QCT 准经典轨线基础实现
 
 ### Added
 

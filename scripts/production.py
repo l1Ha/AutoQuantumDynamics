@@ -60,15 +60,18 @@ SPAN=$(python -c "print(({args.e_max} - {args.e_min}) / {chunks})")
 EMIN=$(python -c "print({args.e_min} + $SPAN * $SLURM_ARRAY_TASK_ID)")
 EMAX=$(python -c "print({args.e_min} + $SPAN * ($SLURM_ARRAY_TASK_ID + 1))")
 
-FLAGS=""
-if [ "{args.torch}" = "1" ]; then FLAGS="--torch --dtype {args.dtype}"; fi
+    FLAGS = f"--pes {args.pes} --method {args.method}"
+    if args.method == "qct":
+        FLAGS += f" --n-traj {args.n_traj}"
+    elif args.torch:
+        FLAGS += f" --torch --dtype {args.dtype}"
 
-python scripts/cluster_scan.py \\
-    --e-min $EMIN --e-max $EMAX --points {pts_per} \\
-    --grid-r {args.grid[0]} --grid-rv {args.grid[1]} \\
-    --steps {args.steps} --part $SLURM_ARRAY_TASK_ID \\
-    $FLAGS \\
-    --out $HOME/aqd_results/scan_part$SLURM_ARRAY_TASK_ID.npz
+    python scripts/cluster_scan.py \
+        --e-min $EMIN --e-max $EMAX --points {pts_per} \
+        --grid-r {args.grid[0]} --grid-rv {args.grid[1]} \
+        --steps {args.steps} --part $SLURM_ARRAY_TASK_ID \
+        $FLAGS \
+        --out $HOME/aqd_results/scan_part$SLURM_ARRAY_TASK_ID.npz
 """
 
 
@@ -95,6 +98,11 @@ def main():
                         choices=["float32", "float64"])
     parser.add_argument("--pes", default="leps",
                         choices=["leps", "eckart", "morse"])
+    parser.add_argument("--method", default="wavepacket",
+                        choices=["wavepacket", "qct"],
+                        help="动力学计算方法 (wavepacket 或 qct)")
+    parser.add_argument("--n-traj", type=int, default=200,
+                        help="QCT 采样每能量点轨迹数")
     parser.add_argument("--rates", action="store_true",
                         help="计算热速率常数 k(T) 与 Arrhenius 图")
     parser.add_argument("--max-wait", type=int, default=3600,
@@ -104,12 +112,12 @@ def main():
 
     print("=" * 60)
     print(f"AutoQuantum 集群生产管线")
-    print(f"  体系: {args.system} / {args.pes}")
+    print(f"  体系: {args.system} / {args.pes} (方法: {args.method})")
     print(f"  能量: {args.e_min}–{args.e_max} au ({args.n_points} 点, "
           f"{args.chunks} 分片)")
     print(f"  网格: {args.grid[0]}×{args.grid[1]}, {args.steps} 步")
     print(f"  分区: {args.partition}" +
-          (" (GPU)" if args.torch else " (CPU)"))
+          (" (GPU)" if args.torch and args.method == "wavepacket" else " (CPU)"))
     print("=" * 60)
 
     # --- Step 1: 同步代码 ---

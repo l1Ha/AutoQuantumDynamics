@@ -74,8 +74,17 @@ class QCTTrajectory:
                   P_R: float, p_r: float,
                   n_steps: int,
                   reaction_criterion: Optional[Callable] = None,
+                  R_refl_threshold: Optional[float] = None,
                   ) -> dict:
         """传播轨迹。
+
+        Parameters
+        ----------
+        R, r : 初始坐标 (Bohr)
+        P_R, p_r : 初始动量 (au)
+        n_steps : 最大步数
+        reaction_criterion : Callable(R, r) -> bool, 判定是否进入反应产物区
+        R_refl_threshold : float, 可选反弹阈值 (当 R > R_refl 且 P_R > 0 时提早终止未反应轨迹)
 
         Returns
         -------
@@ -100,6 +109,11 @@ class QCTTrajectory:
 
             if reaction_criterion is not None and reaction_criterion(R, r):
                 reacted = True
+                steps_used = step + 1
+                break
+
+            # 若已反弹并离开相互作用区, 提早退出
+            if R_refl_threshold is not None and R > R_refl_threshold and P_R > 0:
                 steps_used = step + 1
                 break
 
@@ -144,13 +158,21 @@ class QCTEnsemble:
     def run(self, E_grid: np.ndarray, R0: float,
             r_mean: float, r_sigma: float,
             reaction_criterion: Callable,
-            n_traj: int = 200, seed: int = 0) -> QCTResult:
+            n_traj: int = 200, seed: int = 0,
+            omega: Optional[float] = None) -> QCTResult:
         """对每个碰撞能运行轨迹系综。
 
         Parameters
         ----------
+        E_grid : 碰撞能网格 (Hartree)
+        R0 : 反应物初始中心距 (Bohr)
+        r_mean : 双原子键长平衡位置 (Bohr)
+        r_sigma : 双原子振幅高斯宽度 σ_r (Bohr)
         reaction_criterion : Callable(R, r) → bool
             返回 True 时标记为反应 (如 R < 1.5·r 交换分界面)。
+        n_traj : 每个能量点的轨迹数
+        seed : 随机数种子
+        omega : 可选振动频率 (若未指定, 则由 σ_r = 1/√(μ_r·ω) 推导)
         """
         mass_R = self.mass_R
         mass_r = self.mass_r
@@ -160,23 +182,27 @@ class QCTEnsemble:
         drift_max = 0.0
         n_reacted_all = []
 
+        if omega is None:
+            omega = 1.0 / (mass_r * r_sigma ** 2)
+
         for ie, E in enumerate(energies):
             p_R0 = -np.sqrt(2.0 * mass_R * E)
             rng = np.random.RandomState(seed + ie * 1000)
             n_react = 0
             for _ in range(n_traj):
-                # Wigner 采样 r 和 p_r (振动态)
-                r0, p_r0 = wigner_sample(mass_r, 1.0, 1, seed=rng.randint(1 << 30))
-                r0 += r_mean
-                pr0 = p_r0 * np.sqrt(mass_r / 2.0)  # 换算到动量
+                # 物理 Wigner 分布采样: q 为相对平衡位置位移, p 为物理共轭动量
+                r0_arr, pr0_arr = wigner_sample(mass_r, omega, 1, seed=rng.randint(1 << 30))
+                r0 = float(r0_arr[0]) + r_mean
+                pr0 = float(pr0_arr[0])
                 result = traj.propagate(
-                    R0, r0, p_R0, pr0, self.max_steps,
-                    reaction_criterion=reaction_criterion)
+                    float(R0), r0, float(p_R0), pr0, self.max_steps,
+                    reaction_criterion=reaction_criterion,
+                    R_refl_threshold=float(R0 + 0.5))
                 if result["reacted"]:
                     n_react += 1
-                drift_max = max(drift_max, result["energy_drift"])
+                drift_max = max(drift_max, float(result["energy_drift"]))
             reaction_probs[ie] = n_react / n_traj
             n_reacted_all.append(n_react)
 
         return QCTResult(energies=energies, reaction_probs=reaction_probs,
-                         n_traj_per_energy=n_traj, energy_drift_max=drift_max)
+                         n_traj_per_energy=n_traj, energy_drift_max=float(drift_max))

@@ -127,7 +127,8 @@ def plot_arrhenius(temperatures: np.ndarray, rates: np.ndarray,
     if fit is not None and fit.ea_kj_mol > 0:
         T_fit = np.linspace(T.min(), T.max(), 100)
         inv_T_fit = 1000.0 / T_fit
-        k_fit = np.exp(fit.log_a - fit.ea_kj_mol * 1000 / (8.314 * T_fit))
+        ln_A = fit.log_a * np.log(10.0)
+        k_fit = np.exp(ln_A - fit.ea_kj_mol * 1000.0 / (8.314 * T_fit))
         ax.plot(inv_T_fit, np.log(k_fit), "--", color="#c0392b", lw=1.5,
                 label=f"Arrhenius fit (Ea={fit.ea_kj_mol:.1f} kJ/mol)")
     ax.set_xlabel("1000/T (K$^{-1}$)")

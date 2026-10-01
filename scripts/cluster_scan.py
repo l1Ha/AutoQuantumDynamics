@@ -19,10 +19,12 @@ import numpy as np
 from autoquantum.dynamics import (
     WavePacket2D, WavePacket2DPropagator, WavePacket2DScan,
     h3_reduced_masses, leps_jacobi_pes, leps_exchange_mask,
-    morse_ground_width, DEFAULT_MASS_H,
+    morse_ground_width, harmonic_ground_width, DEFAULT_MASS_H,
+    QCTEnsemble,
 )
 from autoquantum.pes.leps import LEPSBuilder
 from autoquantum.pes.eckart import EckartBuilder
+
 
 
 def _build_pes(pes_name: str):
@@ -52,6 +54,13 @@ def main():
     parser.add_argument("--grid-rv", type=int, default=144)
     parser.add_argument("--pes", default="leps",
                         choices=["leps", "eckart", "morse"])
+    parser.add_argument("--method", default="wavepacket",
+                        choices=["wavepacket", "qct"],
+                        help="动力学计算方法 (wavepacket: 量子波包; qct: 准经典轨线)")
+    parser.add_argument("--n-traj", type=int, default=200,
+                        help="QCT 采样每能量点轨迹数")
+    parser.add_argument("--dt", type=float, default=0.5,
+                        help="时间步长 (au)")
     parser.add_argument("--steps", type=int, default=2500)
     parser.add_argument("--torch", action="store_true",
                         help="使用 PyTorch 后端 (GPU: 加 dtype=float32)")
@@ -65,6 +74,35 @@ def main():
 
     R = np.linspace(0.5, 10.0, args.grid_r)
     r = np.linspace(0.2, 9.5, args.grid_rv)
+
+    if args.method == "qct":
+        sigma_r = morse_ground_width(0.1744, 1.028, mass_r)
+        R0 = 6.7
+        r_mean = 1.401
+        crit = lambda R_val, r_val: R_val < 1.5 * r_val
+        if args.pes == "eckart":
+            R0 = 6.0
+            crit = lambda R_val, r_val: R_val < 2.0
+            sigma_r = harmonic_ground_width(0.5, mass_r)
+        elif args.pes == "morse":
+            crit = lambda R_val, r_val: r_val > 4.0
+
+        ensemble = QCTEnsemble(pes, mass_R, mass_r, dt=args.dt, max_steps=args.steps)
+        energies = np.linspace(args.e_min, args.e_max, args.points)
+        result = ensemble.run(energies, R0=R0, r_mean=r_mean, r_sigma=sigma_r,
+                              reaction_criterion=crit, n_traj=args.n_traj,
+                              seed=args.part * 1000 + 42)
+        out = os.path.abspath(args.out)
+        np.savez(out, energy=result.energies, reaction=result.reaction_probs,
+                 method="qct", n_traj=args.n_traj,
+                 energy_drift_max=result.energy_drift_max,
+                 R_grid=R, r_grid=r)
+        print(f"[part {args.part} (QCT)] E {args.e_min}-{args.e_max} au, "
+              f"{args.points} 点 ({args.n_traj} 轨/点, 最大漂移 {result.energy_drift_max:.2e}) → {out}")
+        for e, p in zip(result.energies, result.reaction_probs):
+            print(f"  E={e:.4f}: P={p:.4f}")
+        return
+
     Prop = WavePacket2DPropagator
     kw = {}
     if args.torch:

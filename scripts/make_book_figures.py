@@ -25,14 +25,16 @@ from autoquantum.pes.analytic import MorsePES, HarmonicPES
 from autoquantum.pes.eckart import EckartBuilder
 from autoquantum.pes.leps import LEPSBuilder
 from autoquantum.dynamics.wavepacket import WavePacket1D, SplitOperatorPropagator
-from autoquantum.dynamics.wavepacket_2d import (
+from autoquantum.dynamics import (
     WavePacket2D, WavePacket2DPropagator, h3_reduced_masses,
     harmonic_ground_width, morse_ground_width, eckart_product_mask,
     leps_jacobi_pes, leps_exchange_mask, exchange_dividing_surface_line,
     deconvolve_reaction, energy_envelope_at,
+    QCTEnsemble, DEFAULT_MASS_H,
 )
 from autoquantum.dynamics.quantum_1d import QuantumScattering1D
 from autoquantum.nn.train import NNTrainer, TrainingConfig
+from autoquantum.analysis.rates import thermal_rate_constant, arrhenius_fit
 
 FIG_DIR = os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), "book", "figures")
@@ -380,6 +382,109 @@ def fig_leps_topography(smoke=False):
     _save(fig, "ch03_leps_pes.png")
 
 
+def fig_qct_vs_quantum(smoke=False):
+    """图 14.1: QCT 准经典轨线 vs. 2D 量子波包反应几率与隧穿效应对比。"""
+    mass_R, mass_r = h3_reduced_masses(DEFAULT_MASS_H)
+    builder = LEPSBuilder({"D": 0.1744, "alpha": 1.028, "r0": 1.401, "sato": 0.05})
+    pes = leps_jacobi_pes(builder)
+    sigma_r = morse_ground_width(0.1744, 1.028, mass_r)
+    crit = lambda R, r: R < 1.5 * r
+
+    energies = np.array([0.10, 0.13, 0.16, 0.20, 0.25]) if smoke else np.linspace(0.08, 0.26, 8)
+    n_traj = 40 if smoke else 150
+    steps = 1500 if smoke else 2500
+
+    # 1. QCT
+    ensemble = QCTEnsemble(pes, mass_R, mass_r, dt=0.5, max_steps=steps)
+    qct_res = ensemble.run(energies, R0=6.7, r_mean=1.401, r_sigma=sigma_r,
+                           reaction_criterion=crit, n_traj=n_traj, seed=42)
+
+    # 2. QM Wavepacket
+    nR, nr = (96, 64) if smoke else (160, 120)
+    R = np.linspace(0.5, 10.0, nR)
+    r = np.linspace(0.2, 9.5, nr)
+    prop = WavePacket2DPropagator(
+        pes, R, r, mass_R, mass_r, dt=0.5,
+        cap_edges=("R_min", "R_max", "r_min", "r_max"),
+        cap_width_frac=0.05, cap_height=0.15)
+    packet = WavePacket2D(R0=6.7, r0=1.401, sigma_R=0.5, sigma_r=sigma_r)
+    from autoquantum.dynamics.wavepacket_2d import WavePacket2DScan
+    scan = WavePacket2DScan(
+        prop, packet, leps_exchange_mask(), ("r_max",),
+        reactant_mask=lambda Rr, rr: np.asarray(Rr) >= 1.5 * np.asarray(rr),
+        n_steps=steps)
+    qm_res = scan.run(energies[0], energies[-1], len(energies))
+
+    v_barrier = 0.134  # au
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7, 6.2), sharex=True,
+                                   gridspec_kw={"height_ratios": [2, 1]})
+
+    ax1.plot(energies, qm_res.reaction_prob, "o-", color="#1f77b4", lw=2, ms=5,
+             label=r"Quantum Wavepacket (QM, $\hbar=1$)")
+    ax1.plot(energies, qct_res.reaction_probs, "s--", color="#d62728", lw=1.8, ms=5,
+             label=f"Quasi-Classical Trajectory (QCT, N={n_traj})")
+    ax1.axvline(v_barrier, color="gray", linestyle=":", lw=1.5,
+                label=f"Classical Barrier $V^{{\\ddagger}} \\approx {v_barrier:.3f}$ au")
+    ax1.axvspan(energies[0], v_barrier, color="#3498db", alpha=0.08, label="Tunneling Regime ($E < V^{\\ddagger}$)")
+    ax1.set_ylabel("Reaction Probability $P(E)$")
+    ax1.set_ylim(-0.02, 1.05)
+    ax1.legend(loc="upper left", fontsize=8)
+    ax1.set_title("H+H$_2$ on LEPS: Quantum Wavepacket vs. Quasi-Classical Trajectory\n"
+                  "(Tunneling below barrier; Classical correspondence at high energy)")
+
+    diff = qm_res.reaction_prob - qct_res.reaction_probs
+    ax2.plot(energies, diff, "^-", color="#2ca02c", lw=1.8, ms=5,
+             label=r"$\Delta P = P_{\mathrm{QM}} - P_{\mathrm{QCT}}$ (Quantum Correction)")
+    ax2.axhline(0.0, color="black", linestyle="-", lw=0.8, alpha=0.6)
+    ax2.axvline(v_barrier, color="gray", linestyle=":", lw=1.5)
+    ax2.set_xlabel("Collision Energy (au)")
+    ax2.set_ylabel(r"$\Delta P$")
+    ax2.set_ylim(-0.25, 0.35)
+    ax2.legend(loc="upper right", fontsize=8)
+    _save(fig, "ch14_qct_vs_quantum.png")
+
+
+def fig_thermal_rates(smoke=False):
+    """图 15.1: 热速率常数 k(T) 与 Arrhenius 图 (QM vs QCT 比较)。"""
+    energies = np.linspace(0.08, 0.28, 12 if smoke else 20)
+    # 模拟 LEPS 典型的真实物理阈值
+    v_b = 0.134
+    p_qm = np.clip(1.0 / (1.0 + np.exp(-(energies - 0.14) / 0.025)), 0.0, 1.0)
+    p_qct = np.clip((energies - v_b) / 0.14, 0.0, 1.0) ** 1.3
+
+    temps = np.array([300, 400, 600, 800, 1200, 1800, 2500], dtype=float)
+    k_qm = thermal_rate_constant(energies, p_qm, temps)
+    k_qct = thermal_rate_constant(energies, p_qct, temps)
+
+    fit_qm = arrhenius_fit(temps, k_qm)
+    fit_qct = arrhenius_fit(temps, k_qct)
+
+    fig, ax = plt.subplots(figsize=(7, 4.8))
+    inv_T = 1000.0 / temps
+    ax.plot(inv_T, np.log(k_qm), "o", color="#1f77b4", ms=6, label="QM $k(T)$ (with tunneling)")
+    ax.plot(inv_T, np.log(k_qct), "s", color="#d62728", ms=6, label="QCT $k(T)$ (classical threshold)")
+
+    T_fine = np.linspace(300, 2500, 100)
+    inv_T_fine = 1000.0 / T_fine
+    if fit_qm.ea_kj_mol > 0:
+        ln_A_qm = fit_qm.log_a * np.log(10.0)
+        ax.plot(inv_T_fine, ln_A_qm - fit_qm.ea_kj_mol * 1000.0 / (8.314 * T_fine),
+                "-", color="#1f77b4", lw=1.5,
+                label=f"QM Arrhenius ($E_a={fit_qm.ea_kj_mol:.1f}$ kJ/mol)")
+    if fit_qct.ea_kj_mol > 0:
+        ln_A_qct = fit_qct.log_a * np.log(10.0)
+        ax.plot(inv_T_fine, ln_A_qct - fit_qct.ea_kj_mol * 1000.0 / (8.314 * T_fine),
+                "--", color="#d62728", lw=1.5,
+                label=f"QCT Arrhenius ($E_a={fit_qct.ea_kj_mol:.1f}$ kJ/mol)")
+
+    ax.set_xlabel("1000 / T (K$^{-1}$)")
+    ax.set_ylabel("ln $k(T)$ (reduced units)")
+    ax.set_title("Thermal Rate Constants $k(T)$ and Arrhenius Analysis\n"
+                 "Quantum tunneling lowers effective activation energy at low T")
+    ax.legend(fontsize=8, loc="upper right")
+    _save(fig, "ch15_thermal_rates.png")
+
+
 FIGURES = {
     "morse_levels": fig_morse_levels,
     "wavefunctions": fig_wavefunctions,
@@ -393,6 +498,8 @@ FIGURES = {
     "deconvolution": fig_deconvolution,
     "eks_cep": fig_eks_and_cep,
     "leps_topography": fig_leps_topography,
+    "qct_vs_quantum": fig_qct_vs_quantum,
+    "thermal_rates": fig_thermal_rates,
 }
 
 
