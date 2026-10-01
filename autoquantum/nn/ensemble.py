@@ -25,6 +25,14 @@ from autoquantum.nn.symmetry import SymmetryFunctionSet, SymmetryFunctionParams
 
 @dataclass
 class AtomicTrainingConfig:
+    """共享原子能量委员会的训练超参数 (数据类)。
+
+    Attributes:
+        hidden_layers: 原子网络隐藏层宽度。
+        lr: 学习率 (总能量损失下 0.01 会发散)。
+        epochs: 每个成员的训练轮数。
+        normalize: 是否标准化特征 (统计量随委员会持久化)。
+    """
     hidden_layers: Tuple[int, ...] = (64, 64)
     # 0.01 在总能量损失下会发散; 0.005 经玩具系统验证稳定收敛
     lr: float = 0.005
@@ -74,11 +82,20 @@ class AtomicEnergyCommittee:
 
     def predict_with_uncertainty(self, coords: np.ndarray
                                  ) -> Tuple[np.ndarray, np.ndarray]:
+        """委员会总能量均值与标准差 (OOD 不确定性信号)。
+
+        Args:
+            coords: (n, N, 3) 或 (N, 3) 原子坐标 (Bohr)。
+
+        Returns:
+            (均值 (n,), 标准差 (n,)); 单成员时标准差为全零。
+        """
         totals = self.atomic_energies(coords).sum(axis=-1)  # (n_m, n)
         return totals.mean(axis=0), totals.std(axis=0, ddof=0) \
             if totals.shape[0] > 1 else np.zeros(totals.shape[1])
 
     def std(self, coords: np.ndarray) -> np.ndarray:
+        """委员会标准差 (n,) — 主动学习的采样信号。"""
         return self.predict_with_uncertainty(coords)[1]
 
     def save(self, path: str) -> None:
@@ -107,6 +124,14 @@ class AtomicEnergyCommittee:
 
     @classmethod
     def load(cls, path: str) -> "AtomicEnergyCommittee":
+        """从 pickle 文件恢复委员会 (含对称函数参数与归一化统计量)。
+
+        Args:
+            path: ``save`` 写出的文件路径。
+
+        Returns:
+            AtomicEnergyCommittee: 恢复的委员会实例。
+        """
         import pickle
         with open(path, "rb") as f:
             d = pickle.load(f)

@@ -91,6 +91,19 @@ def validate_pes_values(name: str, V: np.ndarray,
 
 
 def validate_positive(name: str, value: float, allow_zero: bool = False) -> float:
+    """验证标量参数为有限的正数。
+
+    Args:
+        name: 参数名 (用于错误信息)。
+        value: 待验证值。
+        allow_zero: 是否允许 0。
+
+    Returns:
+        float: 验证通过后的值。
+
+    Raises:
+        ValidationError: 值非有限、为负, 或为 0 且不允许。
+    """
     v = float(value)
     if not np.isfinite(v):
         raise ValidationError(f"{name} 非有限: {value}")
@@ -116,9 +129,11 @@ class PropagationHealth:
 
     @property
     def ok(self) -> bool:
+        """诊断是否通过 (无 NaN 且无任何告警)。"""
         return not self.nan_detected and not self.warnings
 
     def summary(self) -> str:
+        """单行人可读摘要 (存活概率/吸收量/通道和/能量漂移)。"""
         parts = [f"norm={self.norm_final:.4f}", f"absorbed={self.absorbed_total:.4f}"]
         if self.channel_sum is not None:
             parts.append(f"P_react+P_refl={self.channel_sum:.6f}")

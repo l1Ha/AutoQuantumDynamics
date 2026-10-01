@@ -1,6 +1,28 @@
 # Changelog
 
-## 0.16.0 — 热速率常数与多势能面生产管线
+## 0.17.0 — 代码质量与文档完善
+
+### Added
+
+- **83 个中文 docstring** 补充至 17 个核心模块的公开函数和类
+  (含物理单位 Hartree/Bohr/au)；覆盖率从 69% 提升到 ~90%。
+- **`Makefile`**: 常用命令入口 (`make test/check/benchmark/book/clean/
+  sync/submit`)。
+- **`knowledge_base/README.md`**: 标注历史文档可能滞后。
+- **`autoquantum/py.typed`**: 类型检查标记。
+
+### Removed
+
+- 过时 `scripts/sync_github.sh` (指向错误仓库且有 SSH 配置修改风险)。
+- 旧 v0.9.1 PDF 从根目录清理 (最新版随 Release 分发)。
+- `results/` 从 git 移除 (加入 `.gitignore`，通过管线重现)。
+
+### Changed
+
+- `.gitignore` 完善: `results/`、`book/build/`、`从势能面到波包*.pdf`。
+- `production.py` 修复 3 个 bug (重复 --pes、grid_r 引用、numpy import)。
+
+## 0.16.0 — 热速率常数与多势能面生产管线 — 热速率常数与多势能面生产管线
 
 ### Added
 

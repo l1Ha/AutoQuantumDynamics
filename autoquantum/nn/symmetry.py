@@ -34,6 +34,15 @@ import numpy as np
 
 @dataclass
 class SymmetryFunctionParams:
+    """对称函数超参数 (数据类)。
+
+    Attributes:
+        r_cut: Behler 平滑截断半径 (Bohr)。
+        radial_etas: 径向高斯环宽度参数 η 序列 (需与键长尺度匹配)。
+        angular_zetas: 角度项阶数 ζ 序列 (>= 1 的整数)。
+        lam: 角度项余弦系数 λ (±1)。
+        include_angular: 是否包含角度特征 (O(N²) 开销)。
+    """
     # 径向项 exp(-η[(r-r_c)²]) 是以 r_c 为中心的高斯环: η 需与
     # (r_c - r_bond)² 匹配, 否则小分子键长 (1-3 Bohr) 全部落在
     # 高斯尾部 → 死特征 (实测 η≥4, r_c=5 时特征 ~1e-10)
@@ -44,6 +53,7 @@ class SymmetryFunctionParams:
     include_angular: bool = True
 
     def validate(self):
+        """校验参数合法性, 非法时抛出 ValueError。"""
         if self.r_cut <= 0:
             raise ValueError("r_cut 必须为正")
         if not self.radial_etas:

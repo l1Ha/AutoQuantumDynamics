@@ -11,12 +11,26 @@ def trapezoid(y: np.ndarray, x: np.ndarray) -> float:
 
 
 class WavePacket1D:
+    """一维高斯波包初始条件。
+
+    psi ∝ exp(-0.5·((x-x0)/σ)²)·exp(i·p0·(x-x0)), σ 为振幅宽度
+    (位置标准差 σ/√2, 动量标准差 1/(√2σ))。长度 Bohr, 动量 1/Bohr (ħ=1)。
+    """
+
     def __init__(self, x0: float, p0: float, sigma: float):
         self.x0 = x0
         self.p0 = p0
         self.sigma = sigma
 
     def initialize(self, grid: np.ndarray) -> np.ndarray:
+        """构造并归一化初始波包 ψ₀(x) (∫|ψ|²dx = 1)。
+
+        Args:
+            grid: 等距位置网格 (Bohr)。
+
+        Returns:
+            与 grid 同长的复数波函数数组。
+        """
         psi = np.exp(-0.5 * ((grid - self.x0) / self.sigma) ** 2).astype(complex)
         psi *= np.exp(1j * self.p0 * (grid - self.x0))
         psi /= np.sqrt(trapezoid(np.abs(psi) ** 2, grid))
@@ -62,6 +76,14 @@ class SplitOperatorPropagator:
         self.last_absorbed: dict = {}
 
     def step(self, psi: np.ndarray) -> np.ndarray:
+        """推进一个时间步: V/2 → T → V/2, 随后施加左右 CAP 阻尼。
+
+        Args:
+            psi: 当前波函数 (复数, 与 grid 同长)。
+
+        Returns:
+            推进后的波函数; 本步各边吸收量写入 ``self.last_absorbed``。
+        """
         psi = self.exp_V_half * psi
         psi = np.fft.ifft(self.exp_T * np.fft.fft(psi))
         psi = self.exp_V_half * psi
@@ -77,6 +99,17 @@ class SplitOperatorPropagator:
 
     def propagate(self, psi: np.ndarray, n_steps: int,
                   save_every: int = 10) -> Tuple[np.ndarray, np.ndarray]:
+        """传播波包并按固定间隔保存快照。
+
+        Args:
+            psi: 初始波函数 (复数数组)。
+            n_steps: 总时间步数。
+            save_every: 每 n 步保存一次 (末步始终保存)。
+
+        Returns:
+            (times, psi_all): 保存时刻 (au, ħ=1) 与 (n_save, n_grid)
+            复数波函数数组。
+        """
         save_steps = list(range(0, n_steps + 1, save_every))
         if save_steps[-1] != n_steps:
             save_steps.append(n_steps)

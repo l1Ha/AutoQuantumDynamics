@@ -52,6 +52,12 @@ logger = logging.getLogger("AutoQuantum")
 
 @dataclass
 class PipelineConfig:
+    """管线全局配置 (数据类)。
+
+    涵盖 PES 构建、NN 拟合、动力学求解与输出的全部可调参数;
+    二维含时波包参数以 ``wp_`` 前缀区分。物理单位: ħ=1,
+    能量 Hartree, 长度 Bohr, 质量以电子质量计。
+    """
     system_name: str = "H2_1D"
     mass: float = 1.0
     pes_type: str = "morse"
@@ -110,16 +116,30 @@ class PipelineConfig:
 
 
 class AutoPipeline:
+    """AutoQuantum 自动化管线: PES 构建 → NN 拟合 → 动力学 → 可视化。
+
+    按 ``PipelineConfig`` 依次执行四个阶段, 中间与最终结果累积在
+    ``self._results`` 并由 ``run()`` 返回; 全程记录日志并写入运行
+    清单 (配置+环境+结果摘要, 可复现凭证)。
+    """
+
     def __init__(self, config: Optional[PipelineConfig] = None):
         self.config = config or PipelineConfig()
         self._results: Dict[str, Any] = {}
 
     @property
     def is_2d(self) -> bool:
+        """是否按二维体系处理 (H3 体系或 LEPS/Eckart 势)。"""
         return ("h3" in self.config.system_name.lower()
                 or self.config.pes_type in ("leps", "eckart"))
 
     def run(self) -> Dict[str, Any]:
+        """执行完整管线 (PES → NN → 动力学 → 可视化 → 运行清单)。
+
+        Returns:
+            Dict[str, Any]: 各阶段结果 (PES 网格、NN 模型、动力学结果、
+            健康诊断等), 键名见各 ``_step_*`` 方法。
+        """
         if self.config.seed is not None:
             np.random.seed(self.config.seed)
         logger.info("=" * 60)
@@ -525,6 +545,7 @@ class AutoPipeline:
         # 传播收敛检查 (基线 vs 加密网格/时间步)
         if cfg.wp_check_convergence:
             def make_prop(n_R, n_r, dt):
+                """按指定网格规模与步长重建同一体系的传播子 (收敛检查用)。"""
                 return WavePacket2DPropagator(
                     pes, np.linspace(*R_range, n_R), np.linspace(*r_range, n_r),
                     mass_R, mass_r, dt, cap_edges=cap_edges,
@@ -573,6 +594,7 @@ class AutoPipeline:
         grid = np.linspace(cfg.grid_min, cfg.grid_max, cfg.n_grid_points)
 
         def pes(x):
+            """统一 PES 调用入口: NN 代理面优先, 否则用解析势 (Hartree)。"""
             return np.asarray(pes_impl(x), dtype=float)
 
         E0 = 0.5 * (cfg.energy_min + cfg.energy_max)
@@ -602,6 +624,7 @@ class AutoPipeline:
         psi_all = np.zeros((len(save_steps), grid.size), dtype=complex)
 
         def record(k, psi):
+            """在保存步记录波函数与左右两边的累计吸收量。"""
             psi_all[k] = psi
             for e in cum:
                 absorbed_hist[e][k] = cum[e]
@@ -653,6 +676,7 @@ class AutoPipeline:
         self._results["dashboard"] = dashboard
 
     def summary(self) -> str:
+        """返回人可读的多行文本摘要 (体系/方法/能量范围/最大反应概率等)。"""
         lines = [
             "=" * 60,
             "AutoQuantum Pipeline Summary",

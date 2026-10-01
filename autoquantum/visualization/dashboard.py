@@ -13,6 +13,13 @@ except ImportError:  # 包初始化期间的兜底
 
 
 class DashboardGenerator:
+    """汇总管线结果, 生成图表与 HTML 报告。
+
+    依据 ``results`` 中可用的条目自动选择一维/二维绘图, 输出到
+    ``config.output_dir``: PES 图、透射谱、波包快照/概率/GIF 动画
+    与 ``report.html`` 汇总页。
+    """
+
     def __init__(self, results: Dict[str, Any], config):
         self.results = results
         self.config = config
@@ -20,6 +27,7 @@ class DashboardGenerator:
         self.dim = results.get("dynamics_dim", "1d")
 
     def generate_all(self):
+        """生成全部图表与 HTML 报告 (按结果内容自动跳过缺失项)。"""
         os.makedirs(self.output_dir, exist_ok=True)
 
         if self.dim == "2d":

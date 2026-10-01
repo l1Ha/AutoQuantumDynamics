@@ -7,6 +7,22 @@ from autoquantum.nn.model import FeedForwardNN, PESNN
 
 @dataclass
 class TrainingConfig:
+    """NN 训练超参数配置 (数据类)。
+
+    Attributes:
+        hidden_layers: 隐藏层宽度序列。
+        activation: 隐藏层激活函数名 (tanh/sigmoid/relu/linear)。
+        epochs: 最大训练轮数。
+        lr: 学习率。
+        train_split: 训练/验证划分比例。
+        batch_size: 批大小; 0 = 全批量。
+        seed: 随机种子 (初始化与数据划分)。
+        early_stop_patience: 早停容忍轮数。
+        normalize: 是否在训练划分上拟合输入/输出标准化。
+        max_train_points: >0 时等距子采样到该点数。
+        force_weight: 力训练损失权重; 0 = 纯能量拟合。
+        adam_beta1/beta2/eps: Adam 参数 (beta1=0 退回朴素梯度下降)。
+    """
     hidden_layers: List[int] = field(default_factory=lambda: [64, 64, 32])
     activation: str = "tanh"
     epochs: int = 500
@@ -47,6 +63,17 @@ class NNTrainer:
 
     def train(self, X: np.ndarray, y: np.ndarray,
               dY: np.ndarray = None) -> Tuple[PESNN, Dict[str, List[float]]]:
+        """训练 PES 回归模型 (标准化 + Adam + 早停 + 可选力训练)。
+
+        Args:
+            X: 输入 (n, d) 或 (n,) [d=1], 物理单位。
+            y: 能量目标 (n,), 物理单位 (Hartree)。
+            dY: 可选梯度目标 ∂V/∂x (n, d); ``force_weight > 0`` 时启用。
+
+        Returns:
+            (PESNN, history): 携带 training_card 的代理模型与物理单位的
+            train/val 损失历史; 返回的权重为验证损失最低的早停快照。
+        """
         cfg = self.config
         X = np.asarray(X, dtype=float)
         if X.ndim == 1:
@@ -110,6 +137,7 @@ class NNTrainer:
 
         # 联合损失 (物理单位): MSE_V + force_weight · MSE_F
         def combined_loss(Xp, yp, dYp):
+            """物理单位联合损失: MSE(V) + force_weight·MSE(梯度)。"""
             mse_v = np.mean((model.predict(Xp) - yp) ** 2)
             if not force or dYp is None:
                 return mse_v
@@ -126,6 +154,7 @@ class NNTrainer:
                    eps=cfg.adam_eps)
 
         def adam_step(Xb, yb, tb=None):
+            """一步 Adam 更新 (能量损失 + 可选力目标伴随的合并梯度)。"""
             activations, zs = model.forward(Xb)
             dw, db = model._backward(Xb, yb, activations, zs)
             if force and tb is not None:

@@ -10,11 +10,23 @@ from typing import Optional
 
 
 class PESContourPlotter:
+    """二维 PES 等高线与 3D 曲面绘图工具。"""
+
     @staticmethod
     def plot_contour(R: np.ndarray, r: np.ndarray, V: np.ndarray,
                      save_path: str = "pes_contour.png",
                      levels: int = 50,
                      title: str = "Potential Energy Surface"):
+        """绘制二维 PES 填充等高线图 (Jacobi 坐标 R-r 平面)。
+
+        Args:
+            R: R 方向网格 (Bohr)。
+            r: r 方向网格 (Bohr)。
+            V: (n_R, n_r) 势能网格 (Hartree, 'ij' 索引)。
+            save_path: 输出 PNG 文件路径。
+            levels: 填充等高线层数。
+            title: 图标题。
+        """
         fig, ax = plt.subplots(figsize=(8, 6))
         RR, rr = np.meshgrid(R, r, indexing="ij")
         cs = ax.contourf(RR, rr, V, levels=levels, cmap="viridis")
@@ -32,6 +44,15 @@ class PESContourPlotter:
     def plot_3d(R: np.ndarray, r: np.ndarray, V: np.ndarray,
                 save_path: str = "pes_3d.png",
                 title: str = "Potential Energy Surface (3D)"):
+        """绘制二维 PES 三维曲面图 (R, r, V 轴均以 au 标注)。
+
+        Args:
+            R: R 方向网格 (Bohr)。
+            r: r 方向网格 (Bohr)。
+            V: (n_R, n_r) 势能网格 (Hartree)。
+            save_path: 输出 PNG 文件路径。
+            title: 图标题。
+        """
         fig = plt.figure(figsize=(10, 7))
         ax = fig.add_subplot(111, projection="3d")
         RR, rr = np.meshgrid(R, r, indexing="ij")
@@ -49,9 +70,18 @@ class PESContourPlotter:
 
 
 class ReactionPathPlotter:
+    """反应路径 (最小能量剖面) 绘图工具。"""
+
     @staticmethod
     def plot_reaction_profile(rc: np.ndarray, V: np.ndarray,
                               save_path: str = "reaction_profile.png"):
+        """绘制沿反应坐标的能量剖面, 红虚线标注最高势垒位置与数值。
+
+        Args:
+            rc: 反应坐标数组 (Bohr)。
+            V: 对应能量 (Hartree)。
+            save_path: 输出 PNG 文件路径。
+        """
         fig, ax = plt.subplots(figsize=(8, 5))
         ax.plot(rc, V, "b-", linewidth=2)
         ax.axvline(x=rc[np.argmax(V)], color="r", linestyle="--",

@@ -30,6 +30,15 @@ AU_TO_KCAL_MOL = 627.509      # Hartree → kcal/mol
 
 @dataclass
 class ArrheniusFit:
+    """Arrhenius 拟合结果。
+
+    Attributes:
+        ea_kj_mol: 活化能 E_a (kJ/mol)。
+        log_a: 指前因子常用对数 log₁₀A (化学标准)。
+        r_squared: 线性回归决定系数 R²。
+        temperatures: 拟合所用温度数组 (K)。
+        rates: 对应速率常数数组 (约化单位)。
+    """
     ea_kj_mol: float
     log_a: float
     r_squared: float
@@ -37,6 +46,7 @@ class ArrheniusFit:
     rates: np.ndarray
 
     def summary(self) -> str:
+        """单行摘要: 指前因子 A、活化能 (kJ/mol 与 kcal/mol) 与 R²。"""
         return (f"Arrhenius: A = {10**self.log_a:.3e}, "
                 f"Ea = {self.ea_kj_mol:.2f} kJ/mol "
                 f"({self.ea_kj_mol / 4.184:.2f} kcal/mol), "

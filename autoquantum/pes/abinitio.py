@@ -17,6 +17,13 @@ class AbInitioData:
 
     def from_arrays(self, points: np.ndarray, energies: np.ndarray,
                     gradients: Optional[np.ndarray] = None):
+        """从数组直接填充数据 (points 一维输入时重塑为 (n, 1))。
+
+        Args:
+            points: (n, d) 采样点 (物理单位)。
+            energies: (n,) 能量 (Hartree)。
+            gradients: 可选 (n, d) 梯度 (Hartree/Bohr)。
+        """
         points = np.asarray(points, dtype=float)
         if points.ndim == 1:
             points = points.reshape(-1, 1)
@@ -27,6 +34,16 @@ class AbInitioData:
 
     def from_analytic_pes(self, builder, grid: np.ndarray,
                           noise_level: float = 0.0) -> "AbInitioData":
+        """从解析 PES builder 的一维网格评估生成数据集。
+
+        Args:
+            builder: 提供 ``evaluate(grid)`` 的解析势对象。
+            grid: 一维采样网格 (Bohr)。
+            noise_level: 可选高斯噪声幅度 (乘以 max|V|)。
+
+        Returns:
+            self (支持链式调用)。
+        """
         values = builder.evaluate(grid)
         if noise_level > 0:
             noise = np.random.normal(0, noise_level * np.max(values), size=values.shape)
@@ -84,6 +101,7 @@ class AbInitioData:
 
     @property
     def n_points(self) -> int:
+        """数据点数; 未填充数据时为 0。"""
         return len(self.points) if self.points is not None else 0
 
     @classmethod
@@ -184,6 +202,14 @@ class AbInitioData:
 
     @classmethod
     def load_npz(cls, path: str) -> "AbInitioData":
+        """加载 ``save_npz`` 保存的数据集 (含 provenance/geometry/symbols)。
+
+        Args:
+            path: .npz 文件路径。
+
+        Returns:
+            AbInitioData: 恢复的数据容器。
+        """
         import json
         with np.load(path, allow_pickle=False) as f:
             data = cls()
@@ -198,6 +224,14 @@ class AbInitioData:
         return data
 
     def split(self, train_ratio: float = 0.8) -> Tuple["AbInitioData", "AbInitioData"]:
+        """随机打乱并按比例切分为训练/测试两个数据容器。
+
+        Args:
+            train_ratio: 训练集比例。
+
+        Returns:
+            (train, test) 两个 AbInitioData (含梯度, 若原始数据有)。
+        """
         n = self.n_points
         indices = np.random.permutation(n)
         n_train = int(n * train_ratio)

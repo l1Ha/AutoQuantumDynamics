@@ -85,9 +85,11 @@ class AnalyticCalculator(Calculator):
             self.name = name
 
     def energy(self, coords: np.ndarray) -> float:
+        """解析能量 (Hartree)。coords: (N, 3) Bohr。"""
         return float(self.energy_fn(np.asarray(coords, dtype=float)))
 
     def gradient(self, coords: np.ndarray) -> np.ndarray:
+        """解析梯度 (Hartree/Bohr); 未提供解析梯度时用中心差分。"""
         coords = np.asarray(coords, dtype=float)
         if self.gradient_fn is not None:
             return np.asarray(self.gradient_fn(coords), dtype=float)
@@ -176,16 +178,20 @@ class XTBCommandCalculator(Calculator):
         return energy, grad
 
     def energy_and_gradient(self, coords: np.ndarray) -> Tuple[float, np.ndarray]:
+        """单次子进程调用同时返回能量 (Hartree) 与梯度 (Hartree/Bohr)。"""
         return self._parse(self._run(coords))
 
     def energy(self, coords: np.ndarray) -> float:
+        """GFN-xTB 总能量 (Hartree); coords: (N, 3) Bohr。"""
         return self.energy_and_gradient(coords)[0]
 
     def gradient(self, coords: np.ndarray) -> np.ndarray:
+        """GFN-xTB 核梯度 (Hartree/Bohr)。"""
         return self.energy_and_gradient(coords)[1]
 
     @property
     def provenance(self) -> Dict[str, str]:
+        """记录 xtb 版本、电荷、自旋多重度与精度设置。"""
         try:
             ver = subprocess.run([self.binary, "--version"],
                                  capture_output=True, text=True,
@@ -249,16 +255,20 @@ class PySCFCalculator(Calculator):
         return float(e), np.asarray(lib.asarray(grad), dtype=float).reshape(-1, 3)
 
     def energy_and_gradient(self, coords: np.ndarray) -> Tuple[float, np.ndarray]:
+        """SCF 能量 (Hartree) 与梯度 (Hartree/Bohr); SCF 不收敛时抛错。"""
         return self._run(coords)
 
     def energy(self, coords: np.ndarray) -> float:
+        """SCF 能量 (Hartree)。"""
         return self._run(coords)[0]
 
     def gradient(self, coords: np.ndarray) -> np.ndarray:
+        """SCF 核梯度 (Hartree/Bohr)。"""
         return self._run(coords)[1]
 
     @property
     def provenance(self) -> Dict[str, str]:
+        """记录 PySCF 版本、方法、基组、电荷与自旋。"""
         try:
             import pyscf
             ver = pyscf.__version__
@@ -282,6 +292,7 @@ class ASECalculatorAdapter(Calculator):
         self.calc = ase_calculator
 
     def energy_and_gradient(self, coords: np.ndarray) -> Tuple[float, np.ndarray]:
+        """ASE 势能 (Hartree) 与梯度 (取力的负号, Hartree/Bohr)。"""
         from ase import Atoms
         atoms = Atoms(symbols=self.calc.atoms.get_chemical_symbols()
                       if hasattr(self.calc, "atoms") else ["H"] * len(coords),
@@ -292,13 +303,16 @@ class ASECalculatorAdapter(Calculator):
         return e, -forces
 
     def energy(self, coords: np.ndarray) -> float:
+        """ASE 势能 (Hartree)。"""
         return self.energy_and_gradient(coords)[0]
 
     def gradient(self, coords: np.ndarray) -> np.ndarray:
+        """ASE 核梯度 (-力, Hartree/Bohr)。"""
         return self.energy_and_gradient(coords)[1]
 
     @property
     def provenance(self) -> Dict[str, str]:
+        """记录被包装 calculator 的类名与版本。"""
         calc = self.calc
         return {"backend": "ase", "calculator": type(calc).__name__,
                 "version": str(getattr(calc, "version", "unknown"))}
@@ -317,12 +331,14 @@ def demo_calculator(epsilon: float = 0.01, sigma: float = 3.4) -> Calculator:
     """
 
     def energy_fn(coords: np.ndarray) -> float:
+        """LJ 对势能量 4ε[(σ/r)¹² − (σ/r)⁶] (Hartree), r 为两原子间距。"""
         c = np.asarray(coords, dtype=float)
         r2 = ((c[0] - c[1]) ** 2).sum()
         inv6 = (sigma ** 2 / r2) ** 3
         return float(4 * epsilon * (inv6 ** 2 - inv6))
 
     def grad_fn(coords: np.ndarray) -> np.ndarray:
+        """LJ 能量解析梯度 (Hartree/Bohr), 沿两原子连线方向。"""
         c = np.asarray(coords, dtype=float)
         d = c[0] - c[1]
         r2 = float((d ** 2).sum())

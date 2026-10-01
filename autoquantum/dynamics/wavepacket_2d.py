@@ -78,6 +78,15 @@ class WavePacket2D:
     p_r0: float = 0.0
 
     def initialize(self, R_grid: np.ndarray, r_grid: np.ndarray) -> np.ndarray:
+        """构造并归一化初始波包 ψ₀(R, r) (∫|ψ|²dV = 1)。
+
+        Args:
+            R_grid: R 方向等距网格 (Bohr)。
+            r_grid: r 方向等距网格 (Bohr)。
+
+        Returns:
+            (n_R, n_r) 复数波函数数组 ('ij' 索引, 轴 0 对应 R)。
+        """
         RR, rr = np.meshgrid(R_grid, r_grid, indexing="ij")
         psi = np.exp(-0.5 * ((RR - self.R0) / self.sigma_R) ** 2
                      - 0.5 * ((rr - self.r0) / self.sigma_r) ** 2)
@@ -125,10 +134,12 @@ class WavePacket2DResult:
 
     @property
     def final_reaction_probability(self) -> float:
+        """传播结束时的反应概率 P_react(t_final) (无量纲, [0, 1])。"""
         return float(self.reaction_prob[-1])
 
     @property
     def snapshot_times(self) -> np.ndarray:
+        """快照对应的时间数组 (au, ħ=1), 与 ``times`` 相同。"""
         return self.times
 
 
@@ -380,6 +391,7 @@ class WavePacket2DPropagator:
         cumulative = {e: 0.0 for e in self.cap_edges}
 
         def record(k: int, psi: np.ndarray):
+            """在保存步记录存活概率、区域布居、累计吸收量与 (可选) 密度快照。"""
             p2 = np.abs(psi) ** 2 * self.dV
             norm_t[k] = p2.sum()
             if prod_mask is not None:
@@ -475,6 +487,17 @@ class WavePacket2DScan:
 
     def run(self, energy_min: float, energy_max: float,
             n_points: int = 8) -> ScatteringResult2D:
+        """执行碰撞能扫描, 得到反应概率 P(E)。
+
+        Args:
+            energy_min: 最小碰撞能 (Hartree); <= 0 的点反应概率记 0。
+            energy_max: 最大碰撞能 (Hartree)。
+            n_points: 扫描能量点数。
+
+        Returns:
+            ScatteringResult2D: 能量网格与各点最终反应概率
+            (与时间无关扫描接口兼容, 可直接接入可视化/汇总流程)。
+        """
         prop = self.prop
 
         energies = np.linspace(energy_min, energy_max, n_points)
@@ -687,6 +710,7 @@ def leps_jacobi_pes(leps_builder) -> Callable:
     inner = leps_builder._pes
 
     def V(R, r):
+        """共线 LEPS 势 V(R, r) (Hartree), r_AB = R - r/2, r_AC = R + r/2。"""
         R = np.asarray(R, dtype=float)
         r = np.asarray(r, dtype=float)
         return inner.evaluate(R - 0.5 * r, r, R + 0.5 * r)

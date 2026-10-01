@@ -267,6 +267,13 @@ class FeedForwardNN:
         return dw, db
 
     def train_step(self, X: np.ndarray, y: np.ndarray, lr: float = 0.001):
+        """执行单步朴素梯度下降 (作用于原始标准化数据, 由训练器调用)。
+
+        Args:
+            X: 标准化输入 (n, d)。
+            y: 标准化目标 (n,)。
+            lr: 学习率。
+        """
         activations, zs = self.forward(X)
         dw, db = self._backward(X, y, activations, zs)
 
@@ -275,6 +282,12 @@ class FeedForwardNN:
             self.biases[i] -= lr * db[i]
 
     def save(self, path: str, extra: Optional[dict] = None):
+        """pickle 序列化模型 (权重/偏置/归一化参数/可选附加元数据)。
+
+        Args:
+            path: 输出文件路径。
+            extra: 附加写入的键值对 (如 training_card)。
+        """
         import pickle
         payload = {
             "layers": self.layers,
@@ -293,6 +306,14 @@ class FeedForwardNN:
 
     @classmethod
     def load(cls, path: str) -> "FeedForwardNN":
+        """从 pickle 文件加载模型。
+
+        Args:
+            path: 模型文件路径。
+
+        Returns:
+            FeedForwardNN: 恢复的模型实例 (兼容无归一化字段的旧文件)。
+        """
         import pickle
         with open(path, "rb") as f:
             data = pickle.load(f)
@@ -326,9 +347,11 @@ class PESNN:
             else getattr(model, "training_card", {}) or {})
 
     def evaluate(self, x: np.ndarray) -> np.ndarray:
+        """预测势能 V(x) (物理单位, Hartree)。"""
         return self.model.predict(x)
 
     def predict(self, x: np.ndarray) -> np.ndarray:
+        """``evaluate`` 的别名 (物理单位势能预测)。"""
         return self.evaluate(x)
 
     def gradient(self, x: np.ndarray) -> np.ndarray:
@@ -339,10 +362,12 @@ class PESNN:
         return self.evaluate(x)
 
     def save(self, path: str):
+        """保存模型 (附带 training_card 训练元数据, 随文件持久化)。"""
         self.model.save(path, extra={"training_card": self.training_card})
 
     @classmethod
     def load(cls, path: str) -> "PESNN":
+        """加载 PESNN (自动恢复随文件持久化的 training_card)。"""
         model = FeedForwardNN.load(path)
         return cls(model, getattr(model, "training_card", {}))
 
@@ -357,6 +382,7 @@ def nn_pes_2d(model: PESNN):
     >>> prop = WavePacket2DPropagator(pes, R, r, mass_R, mass_r, dt=0.5)
     """
     def V(R, r):
+        """NN 代理势 V(R, r) (Hartree), 广播 R/r 并逐点预测。"""
         Rb = np.asarray(R, dtype=float)
         rb = np.asarray(r, dtype=float)
         Rb, rb = np.broadcast_arrays(Rb, rb)

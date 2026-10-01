@@ -5,6 +5,13 @@ from autoquantum.core.base import DynamicsResult
 
 
 class QuantumScattering1D:
+    """一维时间无关量子散射求解器 (Numerov 方法)。
+
+    在等距网格上用 Numerov 格式从右端向左积分定态薛定谔方程,
+    由渐近区平面波系数提取透射/反射概率。单位: ħ=1, 长度 Bohr,
+    能量 Hartree; 网格两端各取 ~1/12 作为渐近区。
+    """
+
     def __init__(self, mass: float, pes: Callable,
                  n_grid: int = 1000, grid_min: float = 0.3,
                  grid_max: float = 5.0):
@@ -16,6 +23,17 @@ class QuantumScattering1D:
 
     def solve(self, energy_min: float, energy_max: float,
               n_points: int = 100) -> DynamicsResult:
+        """扫描能量并计算透射/反射概率谱。
+
+        Args:
+            energy_min: 最小能量 (Hartree)。
+            energy_max: 最大能量 (Hartree)。
+            n_points: 能量扫描点数。
+
+        Returns:
+            DynamicsResult: 能量网格、透射/反射概率 (各能量点归一到
+            T+R=1) 与求解网格 (Bohr)。
+        """
         energies = np.linspace(energy_min, energy_max, n_points)
         grid = np.linspace(self.grid_min, self.grid_max, self.n_grid)
         dx = grid[1] - grid[0]

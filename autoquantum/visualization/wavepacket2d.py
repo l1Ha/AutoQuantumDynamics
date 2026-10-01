@@ -104,6 +104,7 @@ class WavePacket2DPlotter:
         fig.colorbar(mesh, ax=ax, fraction=0.046, label="|ψ|²")
 
         def update(fi):
+            """动画第 fi 帧更新: 替换密度网格数据与时间标题。"""
             mesh.set_array(result.snapshots[idx[fi]].T.ravel())
             time_text.set_text(f"t = {result.times[idx[fi]]:.0f} au")
             return mesh, time_text
