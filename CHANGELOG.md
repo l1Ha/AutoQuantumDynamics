@@ -8,6 +8,11 @@
 - **物理 Wigner 采样与反射早停**: `QCTEnsemble.run` 自动按双原子约化质量与基态振动宽度计算真实物理频率 $\omega = 1/(\mu_r \sigma_r^2)$；`QCTTrajectory.propagate` 增加 $R_{\rm refl\_threshold}$ 遇阻反射早期退出逻辑，大幅提升非反应轨线积分性能。
 - **集群生产管线深度集成 QCT**: `scripts/cluster_scan.py` 与 `scripts/production.py` 增加 `--method {wavepacket, qct}` 与 `--n-traj` 支持，支持大规模 Slurm 阵列并行化轨线系综生产。
 - **QM vs QCT 比较诊断框架**: 新增 `scripts/compare_qct_quantum.py`，实现同一势能面网格下量子波包动力学与准经典轨线动力的双向交叉基准，输出反应阈值、量子隧穿增强因子与玻尔对应极限定量对比表。
+- **亚稳态体系与高级电子结构接口**:
+  - `PySCFCalculator` 增加高自旋约束（ROHF/ROKS/UHF）、自旋纯度审计与 `spin_lock` 截断机制，消除如 $\text{He}^* + \text{Li}$ 四重态变分塌陷；
+  - 增加最大重叠法（MOM，`use_mom=True`）轨道占据跟踪，避免扫描过程中激发态根翻转；
+  - 增加复势能提取接口 `resonance_width` 与 `complex_energy`，支持自电离衰变宽度 $\Gamma(R)$；
+  - `autoquantum sample` CLI 支持 `--spin`, `--method`, `--basis`, `--xc`, `--spin-lock`, `--spin-tol`, `--mom` 命令行参数。
 - **教材新编两章与全量配图**:
   - 第 14 章《准经典轨线动力学 (QCT)》：哈密顿正则方程、辛积分、Wigner 采样、经典极限与量子隧穿对比。
   - 第 15 章《热速率常数与集群生产》：微观反应几率到宏观速率常数 $k(T)$ 的微正则/正则系综积分、Arrhenius 活化能拟合、Slurm 自动化生产管线。

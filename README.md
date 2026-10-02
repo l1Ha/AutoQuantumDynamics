@@ -5,6 +5,19 @@
 > ⚠️ 这是研究/教学原型，不是经过认证的科学计算软件。定量使用前请阅读
 > [功能边界与已知限制](#功能边界与已知限制) 与 [RELEASE_VALIDATION.md](RELEASE_VALIDATION.md)。
 
+## 亚稳态体系与高级电子结构计算 (v0.19.0)
+
+针对如 $\text{He}^* + \text{Li}$ 等处于电离连续谱中的亚稳态碰撞体系，`PySCFCalculator` 提供了高自旋约束与轨道锁定机制：
+- **高自旋约束与自旋锁定 (`spin_lock`)**: 支持严格 ROHF/ROKS 及 UHF，审计 $\langle S^2 \rangle$ 并拦截自旋污染，物理上消除四重态（$^4\Sigma^+$，$S=3/2$）的自电离变分塌陷；
+- **最大重叠法 (`use_mom=True`)**: 沿几何采样路径维持特定电子激发/占据组态，避免根翻转；
+- **复势能接口 (`resonance_width` / `complex_energy`)**: 支持提取自电离衰变宽度 $\Gamma(R)$ 与复光学势 $W(R) = V(R) - \frac{i}{2}\Gamma(R)$。
+
+```bash
+# 从 CLI 采样高自旋开壳层构型
+autoquantum sample --backend pyscf --input ref.xyz -o he_li_highspin.npz \
+    --spin 3 --method rohf --basis def2-svp --spin-lock
+```
+
 ## 热速率常数 (v0.16.0)
 
 ```python

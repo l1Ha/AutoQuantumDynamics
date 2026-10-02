@@ -126,6 +126,20 @@ def main():
                                help="总电荷 (xtb/pyscf)")
     sample_parser.add_argument("--uhf", type=int, default=0,
                                help="未成对电子数 (xtb)")
+    sample_parser.add_argument("--spin", type=int, default=None,
+                               help="自旋参数 2S = Na - Nb (pyscf, 缺省与 --uhf 保持一致)")
+    sample_parser.add_argument("--method", default="rhf",
+                               help="电子结构方法: rhf, uhf, rohf, dft, rks, roks, uks (pyscf)")
+    sample_parser.add_argument("--basis", default="sto-3g",
+                               help="基组 (pyscf, 默认 sto-3g)")
+    sample_parser.add_argument("--xc", default=None,
+                               help="DFT 泛函名称 (如 b3lyp, pbe; pyscf)")
+    sample_parser.add_argument("--spin-lock", action="store_true",
+                               help="启用严格自旋态检查与自旋污染截断 (pyscf)")
+    sample_parser.add_argument("--spin-tol", type=float, default=0.1,
+                               help="自旋锁定允许的最大偏差 |<S^2> - S(S+1)| (默认 0.1)")
+    sample_parser.add_argument("--mom", action="store_true",
+                               help="启用最大重叠法 (MOM) 沿采样序列跟踪特定激发/占据态 (pyscf)")
 
     fit_parser = sub.add_parser(
         "fit", help="在数据集 (npz) 上训练 NN 势能代理面")
@@ -244,6 +258,17 @@ def _sample_data(args):
         kwargs = {"charge": args.charge}
         if args.backend == "xtb":
             kwargs["uhf"] = args.uhf
+        elif args.backend == "pyscf":
+            spin_val = args.spin if args.spin is not None else args.uhf
+            kwargs.update({
+                "spin": spin_val,
+                "method": args.method,
+                "basis": args.basis,
+                "xc": args.xc,
+                "spin_lock": args.spin_lock,
+                "spin_tol": args.spin_tol,
+                "use_mom": args.mom,
+            })
     calc = make_calculator(args.backend, symbols=symbols, **kwargs)
     print(f"后端: {calc.name} {calc.provenance}")
 

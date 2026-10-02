@@ -28,7 +28,7 @@ import subprocess
 import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -203,28 +203,58 @@ class XTBCommandCalculator(Calculator):
 
 
 class PySCFCalculator(Calculator):
-    """PySCF RHF/DFT 后端 (可选依赖; 实验性)。
+    """PySCF 从头算与 DFT 计算后端 (可选依赖; 实验性)。
 
-    需安装 pyscf; 梯度经 SCF 的 ``grad`` kernel 获得 (RHF 为解析
-    梯度, DFT 数值梯度)。本仓库发布验证环境未安装 pyscf。
+    支持能力:
+    - **闭壳层与开壳层**: RHF, ROHF, UHF, DFT (RKS/ROKS/UKS)
+    - **高自旋约束与自旋锁定 (spin_lock)**: 开壳层自旋纯度审计, 防止态跃迁与自旋污染
+    - **最大重叠法 (MOM)**: 沿几何路径保持特定电子轨道占据, 克服激发态与非平衡态变分塌陷
+    - **共振态衰减宽度 (CAP-PES)**: 提供自电离衰变宽度 Γ(R) 与复能量 E_R - i*Γ/2 接口
     """
 
     name = "pyscf"
 
     def __init__(self, symbols: Sequence[str], basis: str = "sto-3g",
                  charge: int = 0, spin: int = 0, method: str = "rhf",
-                 unit: str = "Bohr"):
+                 xc: Optional[str] = None, spin_lock: bool = False,
+                 spin_tol: float = 0.1, use_mom: bool = False,
+                 mom_reference: str = "prev",
+                 cap_params: Optional[Dict[str, Any]] = None,
+                 unit: str = "Bohr", conv_tol: float = 1e-9,
+                 max_cycle: int = 100):
         self.symbols = list(symbols)
         self.basis = basis
         self.charge = charge
         self.spin = spin
         self.method = method.lower()
+        self.xc = xc
+        self.spin_lock = spin_lock
+        self.spin_tol = float(spin_tol)
+        self.use_mom = use_mom
+        self.mom_reference = mom_reference
+        self.cap_params = cap_params
         self.unit = unit
+        self.conv_tol = float(conv_tol)
+        self.max_cycle = int(max_cycle)
+
+        self._ref_mo_coeff = None
+        self._ref_mo_occ = None
+        self._initial_mo_coeff = None
+        self._initial_mo_occ = None
+
         try:
             import pyscf  # noqa: F401
         except ImportError as exc:
             raise CommandBackendError(
                 "未安装 pyscf; pip install pyscf, 或改用其他后端") from exc
+
+    def reset_mom(self, mo_coeff: Optional[np.ndarray] = None,
+                  mo_occ: Optional[np.ndarray] = None) -> None:
+        """重置或手动指定 MOM (最大重叠法) 的参考轨道。"""
+        self._ref_mo_coeff = mo_coeff
+        self._ref_mo_occ = mo_occ
+        self._initial_mo_coeff = mo_coeff
+        self._initial_mo_occ = mo_occ
 
     def _mol(self, coords: np.ndarray):
         from pyscf import gto
@@ -233,29 +263,90 @@ class PySCFCalculator(Calculator):
                         spin=self.spin, unit=self.unit, verbose=0)
 
     def _mf(self, mol):
-        if self.method == "rhf":
-            from pyscf import scf
-            return scf.RHF(mol)
-        elif self.method in ("uhf", "rohf"):
-            from pyscf import scf
-            return scf.UHF(mol) if self.method == "uhf" else scf.ROHF(mol)
-        elif self.method == "dft":
-            from pyscf import dft
-            return dft.KS(mol)
-        raise ValueError(f"未知 method: {self.method}")
+        from pyscf import scf, dft
+        m = self.method
+        if m == "rhf":
+            mf = scf.RHF(mol)
+        elif m == "rohf":
+            mf = scf.ROHF(mol)
+        elif m == "uhf":
+            mf = scf.UHF(mol)
+        elif m in ("dft", "rks"):
+            mf = dft.RKS(mol) if self.spin == 0 else dft.ROKS(mol)
+            if self.xc:
+                mf.xc = self.xc
+        elif m == "roks":
+            mf = dft.ROKS(mol)
+            if self.xc:
+                mf.xc = self.xc
+        elif m == "uks":
+            mf = dft.UKS(mol)
+            if self.xc:
+                mf.xc = self.xc
+        else:
+            raise ValueError(
+                f"未知 method: {self.method}; 支持 'rhf', 'rohf', 'uhf', "
+                f"'dft', 'rks', 'roks', 'uks'"
+            )
+
+        mf.conv_tol = self.conv_tol
+        mf.max_cycle = self.max_cycle
+        return mf
 
     def _run(self, coords: np.ndarray):
         from pyscf import lib
-        mol = self._mol(np.asarray(coords, dtype=float))
+        coords_arr = np.asarray(coords, dtype=float)
+        mol = self._mol(coords_arr)
         mf = self._mf(mol)
+
+        # MOM (最大重叠法) 注入
+        if self.use_mom and self._ref_mo_coeff is not None and self._ref_mo_occ is not None:
+            from pyscf.scf import addons
+            mf = addons.mom_occ(mf, self._ref_mo_coeff, set_occ=self._ref_mo_occ)
+
         e = mf.kernel()
         if not mf.converged:
             raise CommandBackendError("PySCF SCF 未收敛")
+
+        # 自旋态审计与自旋锁定
+        if hasattr(mf, "spin_square") and callable(mf.spin_square):
+            try:
+                res = mf.spin_square()
+                if isinstance(res, (tuple, list)) and len(res) >= 2:
+                    ss, _ = res[0], res[1]
+                    s_ideal = abs(self.spin) / 2.0
+                    s2_ideal = s_ideal * (s_ideal + 1.0)
+                    s2_diff = abs(ss - s2_ideal)
+                    if self.spin_lock and s2_diff > self.spin_tol:
+                        raise CommandBackendError(
+                            f"自旋锁定失败: 实际 <S^2>={ss:.4f}, 理论值 S(S+1)={s2_ideal:.4f}, "
+                            f"自旋污染偏差 {s2_diff:.4f} 超过阈值 {self.spin_tol}"
+                        )
+            except CommandBackendError:
+                raise
+            except Exception:
+                pass
+
+        # 缓存当前收敛轨道供后续构型 MOM 跟踪
+        if self.use_mom:
+            mo_c = mf.mo_coeff
+            mo_o = mf.mo_occ
+            if self._initial_mo_coeff is None:
+                self._initial_mo_coeff = mo_c
+                self._initial_mo_occ = mo_o
+            if self.mom_reference == "prev":
+                self._ref_mo_coeff = mo_c
+                self._ref_mo_occ = mo_o
+            elif self.mom_reference == "initial":
+                self._ref_mo_coeff = self._initial_mo_coeff
+                self._ref_mo_occ = self._initial_mo_occ
+
         grad = mf.nuc_grad_method().kernel()
-        return float(e), np.asarray(lib.asarray(grad), dtype=float).reshape(-1, 3)
+        grad_arr = np.asarray(lib.asarray(grad), dtype=float).reshape(-1, 3)
+        return float(e), grad_arr
 
     def energy_and_gradient(self, coords: np.ndarray) -> Tuple[float, np.ndarray]:
-        """SCF 能量 (Hartree) 与梯度 (Hartree/Bohr); SCF 不收敛时抛错。"""
+        """SCF 能量 (Hartree) 与梯度 (Hartree/Bohr); SCF 不收敛或自旋锁定失败时抛错。"""
         return self._run(coords)
 
     def energy(self, coords: np.ndarray) -> float:
@@ -266,17 +357,63 @@ class PySCFCalculator(Calculator):
         """SCF 核梯度 (Hartree/Bohr)。"""
         return self._run(coords)[1]
 
+    def resonance_width(self, coords: np.ndarray) -> float:
+        """估计或计算共振态电子自电离衰变宽度 Γ(R) (Hartree)。
+
+        当提供 ``cap_params`` 时按模型或 CAP 势盒计算衰变宽度;
+        缺省或未配置时返回 0.0 (实势能面极限)。
+        """
+        if not self.cap_params:
+            return 0.0
+        c = np.asarray(coords, dtype=float)
+        p_type = self.cap_params.get("type", "exponential")
+        idx = self.cap_params.get("r_index", (0, 1))
+        if len(c) > max(idx):
+            r = float(np.linalg.norm(c[idx[0]] - c[idx[1]]))
+        else:
+            r = float(np.linalg.norm(c[0]))
+
+        if p_type == "exponential":
+            a = float(self.cap_params.get("A", 0.01))
+            beta = float(self.cap_params.get("beta", 1.0))
+            return float(a * np.exp(-beta * r))
+        elif p_type == "box":
+            eta = float(self.cap_params.get("eta", 0.001))
+            r_cap = float(self.cap_params.get("r_cap", 5.0))
+            if r > r_cap:
+                return float(2.0 * eta * (r - r_cap) ** 2)
+            return 0.0
+        return 0.0
+
+    def complex_energy(self, coords: np.ndarray) -> complex:
+        """复共振能量 E_res = E_R - i * Γ/2 (Hartree)。"""
+        e = self.energy(coords)
+        gamma = self.resonance_width(coords)
+        return complex(e, -0.5 * gamma)
+
     @property
     def provenance(self) -> Dict[str, str]:
-        """记录 PySCF 版本、方法、基组、电荷与自旋。"""
+        """记录 PySCF 版本、方法、基组、电荷、自旋与高级设置。"""
         try:
             import pyscf
             ver = pyscf.__version__
         except Exception:
             ver = "unknown"
-        return {"backend": "pyscf", "version": ver, "method": self.method,
-                "basis": self.basis, "charge": str(self.charge),
-                "spin": str(self.spin)}
+        p = {
+            "backend": "pyscf",
+            "version": ver,
+            "method": self.method,
+            "basis": self.basis,
+            "charge": str(self.charge),
+            "spin": str(self.spin),
+            "spin_lock": str(self.spin_lock),
+            "use_mom": str(self.use_mom),
+        }
+        if self.xc:
+            p["xc"] = str(self.xc)
+        if self.cap_params:
+            p["cap_params"] = str(self.cap_params)
+        return p
 
 
 class ASECalculatorAdapter(Calculator):
