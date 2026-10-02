@@ -11,13 +11,13 @@
 # Slurm 分区: liquid_high (xc001-016, 液冷 16x192核) / air (xa,xb,xd 风冷, xb002 有 A100)
 # 节点: target-server (c211/xb002: 192核 EPYC 9654, 755G, A100-40G)
 set -euo pipefail
-HOST="${AQD_HOST:-target-server}"
+HOST="${AQD_HOST:-c211}"
 REMOTE_DIR="${AQD_REMOTE_DIR:-\$HOME/AutoQuantum}"
-R_PY="~/aqd-venv/bin/python"
+R_PY="~/aqd-env/bin/python"
 
 case "${1:-}" in
   sync)
-    tar czf /tmp/aqd.tar.gz --exclude .git --exclude "book/build" \
+    COPYFILE_DISABLE=1 tar czf /tmp/aqd.tar.gz --exclude .git --exclude "book/build" \
         --exclude "从势能面*" --exclude dist --exclude "__pycache__" \
         --exclude ".venv" --exclude results .
     scp -q /tmp/aqd.tar.gz "$HOST:~/"

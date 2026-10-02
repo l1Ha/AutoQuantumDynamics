@@ -5,17 +5,28 @@
 > ⚠️ 这是研究/教学原型，不是经过认证的科学计算软件。定量使用前请阅读
 > [功能边界与已知限制](#功能边界与已知限制) 与 [RELEASE_VALIDATION.md](RELEASE_VALIDATION.md)。
 
-## 亚稳态体系与高级电子结构计算 (v0.19.0)
+## 亚稳态体系与高级电子结构计算 (v0.20.0)
 
 针对如 $\text{He}^* + \text{Li}$ 等处于电离连续谱中的亚稳态碰撞体系，`PySCFCalculator` 提供了高自旋约束与轨道锁定机制：
-- **高自旋约束与自旋锁定 (`spin_lock`)**: 支持严格 ROHF/ROKS 及 UHF，审计 $\langle S^2 \rangle$ 并拦截自旋污染，物理上消除四重态（$^4\Sigma^+$，$S=3/2$）的自电离变分塌陷；
+- **高自旋约束与自旋锁定 (`spin_lock`)**: 支持严格 ROHF/ROKS 及 UHF/UKS，审计 $\langle S^2 \rangle$ 并拦截自旋污染，物理上消除四重态（$^4\Sigma^+$，$S=3/2$）的自电离变分塌陷；
 - **最大重叠法 (`use_mom=True`)**: 沿几何采样路径维持特定电子激发/占据组态，避免根翻转；
 - **复势能接口 (`resonance_width` / `complex_energy`)**: 支持提取自电离衰变宽度 $\Gamma(R)$ 与复光学势 $W(R) = V(R) - \frac{i}{2}\Gamma(R)$。
 
 ```bash
 # 从 CLI 采样高自旋开壳层构型
 autoquantum sample --backend pyscf --input ref.xyz -o he_li_highspin.npz \
-    --spin 3 --method rohf --basis def2-svp --spin-lock
+    --spin 3 --method rohf --basis aug-cc-pVTZ --spin-lock --mom
+```
+
+**真实集群实测** (`scripts/calc_metastable_heli.py`，c211 → Slurm `liquid_high`)：
+He\*(2³S)+Li 四重态/双重态势能面 (aug-cc-pVTZ, 30 点 ROHF+spin_lock+MOM)，
+FCI 校验 He ³S–¹S = **19.88 eV**（实验 19.82 eV），渐近一致性 0.9 mHa，
+范德华阱 54 meV，垂直能隙 18.8→21.1 eV，全程 30.6 s。图见
+[book 第 4 章](book/chapters/04-电子结构基础.md)，原始数据 `book/data/he_li_metastable_pes.npz`。
+
+```bash
+bash scripts/remote.sh sync && bash scripts/remote.sh submit liquid_high scripts/sbatch_he_li.sbatch
+python scripts/calc_metastable_heli.py --replot book/data/he_li_metastable_pes.npz  # 本地重绘
 ```
 
 ## 热速率常数 (v0.16.0)

@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.20.0 — 亚稳态体系从头算: 高自旋锁定、MOM 与真实集群算例
+
+### Added
+
+- **`PySCFCalculator` 高级电子结构能力** (`pes/calculators.py`):
+  - **高自旋约束与自旋锁定**: 支持 ROHF/ROHF/ROKS/UHF/UKS 方法分发;
+    `spin_lock=True` 时收敛后用 `mf.spin_square()` 审计自旋纯度, 偏差超过
+    `spin_tol` 抛出 `CommandBackendError`, 从物理上杜绝激发态变分塌陷;
+  - **最大重叠法 (MOM)**: `use_mom=True` + `mom_reference={'prev','initial'}`,
+    按 PySCF 2.x API `mom_occ(mf, occorb, setocc)` 注入 alpha/beta 分离占据
+    (ROHF 的 1 维 {2,1,0} 占据自动展开为 (2, nmo)), 沿几何路径跟踪指定组态;
+  - **复共振势接口**: `resonance_width(coords)` (指数/盒式模型) 与
+    `complex_energy(coords)` 返回 $W(R)=V(R)-i\Gamma(R)/2$, 供非厄米波包传播;
+  - `_mol()` 显式 `mol.build()`; `conv_tol`/`max_cycle`/`xc` 可配置;
+    `provenance` 完整记录 method/basis/charge/spin/spin_lock/use_mom/xc/cap。
+- **CLI**: `autoquantum sample` 新增 `--spin`, `--method`, `--basis`, `--xc`,
+  `--spin-lock`, `--spin-tol`, `--mom` (修复此前 PySCF 自旋参数无法从命令行
+  传入的断层)。
+- **真实集群算例** `scripts/calc_metastable_heli.py` + `scripts/sbatch_he_li.sbatch`:
+  He\*(2³S)+Li 四重态/双重态势能面 (aug-cc-pVTZ, 30 点 ROHF+spin_lock+MOM 链),
+  含原子渐近 FCI 校验、垂直能隙 $\Delta E(R)$、自电离宽度 $\Gamma(R)$ 与四联图;
+  `--replot` 支持从 npz 离线重绘 (无需 pyscf)。已在 c211→liquid_high 实测:
+  FCI ³S–¹S = 19.88 eV (实验 19.82), 渐近一致性 0.9 mHa, vdW 阱 54 meV,
+  $\Delta E$ = 18.8→21.1 eV, 全程 30.6 s。
+- **测试**: 新增 8 项 PySCF Mock 测试 (方法分发/自旋锁定拦截/MOM setocc 格式/
+  CAP 宽度/复能量), 共 109 项; 无需安装 pyscf 即可在 CI 全绿。
+
+### Fixed
+
+- **MOM 调用签名**: 改为 PySCF 2.x 的位置参数 `mom_occ(mf, occorb, setocc)`
+  并构造 ROHF/UHF 所需的 alpha/beta 占据数组 (原 `set_occ=` 关键字在
+  PySCF 2.14 不存在)。
+- **`remote.sh` 默认主机/解释器**: `c211` + `~/aqd-env` (原 target-server/aqd-venv),
+  并抑制 macOS 扩展属性导致的 tar 噪音。
+- **教材配图 CJK 字体**: 跨平台字体探测 (Noto CJK/Fandol/Droid/Songti),
+  对数轴改用纯文本指数格式器, 避免 CJK 字体缺 U+2212 导致负号丢失。
+
+### Documentation
+
+- 教材第 4 章新增"亚稳态体系与自电离共振 (He\*+Li)"与"最大重叠法"两节,
+  并附集群实测四联图 (`book/figures/ch04_he_li_metastable.png`, 原始数据
+  `book/data/he_li_metastable_pes.npz`); README/CHANGELOG 同步。
+
 ## 0.19.0 — QCT 集成、量子对比与教材全书编译
 
 ### Added

@@ -2,7 +2,7 @@
 
 **分子反应动力学的量子理论、数值验证与代码实践**
 
-从量子力学基础到可验证的分子反应动力学计算——与 [AutoQuantum](../) 代码库逐行对应的中文书籍 (v0.19.0)。
+从量子力学基础到可验证的分子反应动力学计算——与 [AutoQuantum](../) 代码库逐行对应的中文书籍 (v0.20.0)。
 
 ## 适读人群
 
@@ -51,4 +51,4 @@ python -m unittest discover -s tests
 
 ## 版本对应
 
-本书对应 AutoQuantum v0.19.0 (全书 15 章、2 个附录、14 张真实计算配图)。核心验证数值 (波包 vs 解析基准、力训练提升、double-backprop FD 门控、QCT 能量守恒与隧穿差值) 见仓库 [RELEASE_VALIDATION.md](../RELEASE_VALIDATION.md)。
+本书对应 AutoQuantum v0.20.0 (全书 15 章、2 个附录、15 张真实计算配图 (含 He*+Li 集群实测))。核心验证数值 (波包 vs 解析基准、力训练提升、double-backprop FD 门控、QCT 能量守恒与隧穿差值) 见仓库 [RELEASE_VALIDATION.md](../RELEASE_VALIDATION.md)。

@@ -258,9 +258,11 @@ class PySCFCalculator(Calculator):
 
     def _mol(self, coords: np.ndarray):
         from pyscf import gto
-        return gto.Mole(atom=[(s, c) for s, c in zip(self.symbols, coords)],
-                        basis=self.basis, charge=self.charge,
-                        spin=self.spin, unit=self.unit, verbose=0)
+        mol = gto.Mole(atom=[(s, c) for s, c in zip(self.symbols, coords)],
+                       basis=self.basis, charge=self.charge,
+                       spin=self.spin, unit=self.unit, verbose=0)
+        mol.build()  # 显式构建, 避免 SCF kernel 触发未初始化告警
+        return mol
 
     def _mf(self, mol):
         from pyscf import scf, dft
@@ -293,16 +295,33 @@ class PySCFCalculator(Calculator):
         mf.max_cycle = self.max_cycle
         return mf
 
+    @staticmethod
+    def _mom_setocc(mo_occ: np.ndarray) -> np.ndarray:
+        """把 ``mf.mo_occ`` 转换为 PySCF ``mom_occ`` 所需的占据数组。
+
+        - UHF/UKS: ``mo_occ`` 已是 (2, nmo) 的 0/1 alpha/beta 数组, 直接使用;
+        - ROHF/ROKS: ``mo_occ`` 为一维 {2,1,0} (双占据/单占据/空), 需展开为
+          (2, nmo): alpha = [occ≥1], beta = [occ≥2] (PySCF MOM 的约定)。
+        """
+        occ = np.asarray(mo_occ, dtype=float)
+        if occ.ndim == 2:
+            return (occ > 0).astype(float)
+        alpha = (occ >= 1.0).astype(float)
+        beta = (occ >= 2.0).astype(float)
+        return np.stack([alpha, beta])
+
     def _run(self, coords: np.ndarray):
         from pyscf import lib
         coords_arr = np.asarray(coords, dtype=float)
         mol = self._mol(coords_arr)
         mf = self._mf(mol)
 
-        # MOM (最大重叠法) 注入
+        # MOM (最大重叠法) 注入: 以参考轨道最大重叠原则决定每步占据,
+        # 维持指定激发态组态 (PySCF 2.x API: mom_occ(mf, occorb, setocc), 原地修改)
         if self.use_mom and self._ref_mo_coeff is not None and self._ref_mo_occ is not None:
             from pyscf.scf import addons
-            mf = addons.mom_occ(mf, self._ref_mo_coeff, set_occ=self._ref_mo_occ)
+            setocc = self._mom_setocc(self._ref_mo_occ)
+            mf = addons.mom_occ(mf, self._ref_mo_coeff, setocc)
 
         e = mf.kernel()
         if not mf.converged:

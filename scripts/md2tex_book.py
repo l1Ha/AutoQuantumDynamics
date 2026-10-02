@@ -22,7 +22,7 @@ BUILD = os.path.join(BOOK, "build")
 TITLE = "从势能面到波包"
 SUBTITLE = "分子反应动力学的量子理论、数值验证与代码实践"
 AUTHOR = "AutoQuantum 项目组"
-VERSION = "v0.19.0"
+VERSION = "v0.20.0"
 
 PREAMBLE = rf"""
 \documentclass[UTF8, a4paper, 11pt, openany]{{ctexbook}}

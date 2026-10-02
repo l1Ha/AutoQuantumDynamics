@@ -231,9 +231,9 @@ class TestPySCFCalculatorMock(unittest.TestCase):
         mock_mol = MagicMock()
         mock_pyscf.gto.Mole.return_value = mock_mol
 
-        # 模拟两步计算
-        fake_mo_1 = np.array([[1.0, 0.0], [0.0, 1.0]])
-        fake_occ_1 = np.array([2.0, 0.0])
+        # 模拟两步 ROHF 计算 (He*+Li 四重态: 5 电子 = 4α + 1β, 2S=3)
+        fake_mo_1 = np.eye(5)
+        fake_occ_1 = np.array([2.0, 1.0, 1.0, 1.0, 0.0])  # ROHF 一维占据
 
         mock_mf = MagicMock()
         mock_mf.converged = True
@@ -243,25 +243,47 @@ class TestPySCFCalculatorMock(unittest.TestCase):
         mock_grad = MagicMock()
         mock_grad.kernel.return_value = np.zeros((2, 3))
         mock_mf.nuc_grad_method.return_value = mock_grad
-        mock_pyscf.scf.RHF.return_value = mock_mf
+        mock_pyscf.scf.ROHF.return_value = mock_mf
         mock_pyscf.scf.addons.mom_occ.return_value = mock_mf
 
         coords_1 = np.array([[0.0, 0.0, 0.0], [4.0, 0.0, 0.0]])
         coords_2 = np.array([[0.0, 0.0, 0.0], [4.2, 0.0, 0.0]])
 
         with patch.dict(sys.modules, mods):
-            calc = make_calculator("pyscf", symbols=["He", "Li"], method="rhf", use_mom=True)
+            calc = make_calculator("pyscf", symbols=["He", "Li"], spin=3,
+                                   method="rohf", use_mom=True)
             # 第 1 步: 无先验参考, mom_occ 不应调用
             calc.energy(coords_1)
             mock_pyscf.scf.addons.mom_occ.assert_not_called()
 
-            # 第 2 步: 存在第 1 步轨道, mom_occ 必须被注入调用
+            # 第 2 步: 存在第 1 步轨道, mom_occ 必须被注入, 且 setocc 为
+            # (2, nmo) 的 alpha/beta 分离数组 (PySCF ROHF MOM 约定)
             calc.energy(coords_2)
             mock_pyscf.scf.addons.mom_occ.assert_called_once()
+            call_args = mock_pyscf.scf.addons.mom_occ.call_args
+            occorb_arg, setocc_arg = call_args[0][1], call_args[0][2]
+            np.testing.assert_allclose(occorb_arg, fake_mo_1)
+            self.assertEqual(setocc_arg.shape, (2, 5))
+            # occ=[2,1,1,1,0] → alpha=[1,1,1,1,0], beta=[1,0,0,0,0]
+            np.testing.assert_allclose(setocc_arg, [[1.0, 1.0, 1.0, 1.0, 0.0],
+                                                    [1.0, 0.0, 0.0, 0.0, 0.0]])
+            # 4α - 1β = 3 = 2S ✓, 总电子数 5 ✓
+            self.assertAlmostEqual(setocc_arg[0].sum() - setocc_arg[1].sum(), 3.0)
+            self.assertAlmostEqual(setocc_arg.sum(), 5.0)
 
             # 重置 MOM
             calc.reset_mom()
             self.assertIsNone(calc._ref_mo_coeff)
+
+    def test_mom_setocc_conversion_uhf(self):
+        """UHF/UKS 的 (2,nmo) 0/1 占据数组应原样透传。"""
+        from autoquantum.pes.calculators import PySCFCalculator
+        occ_uhf = np.array([[1.0, 1.0, 0.0], [1.0, 0.0, 0.0]])
+        out = PySCFCalculator._mom_setocc(occ_uhf)
+        np.testing.assert_allclose(out, occ_uhf)
+        # ROHF 一维 {2,1,0} → (2,nmo)
+        out_rohf = PySCFCalculator._mom_setocc(np.array([2.0, 1.0, 0.0]))
+        np.testing.assert_allclose(out_rohf, [[1.0, 1.0, 0.0], [1.0, 0.0, 0.0]])
 
     def test_resonance_width_and_complex_energy(self):
         import sys
