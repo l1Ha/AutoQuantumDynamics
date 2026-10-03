@@ -40,6 +40,26 @@ bash scripts/remote.sh sync && bash scripts/remote.sh submit liquid_high scripts
 python scripts/calc_metastable_heli.py --replot book/data/he_li_metastable_pes.npz  # 本地重绘
 ```
 
+## 误差 < 1% 审计 (v0.20.2)
+
+以 NIST 与生产参考曲线为基准的定量迭代审计 (`scripts/target_1pct_audit.py`,
+`scripts/error_budget_report.py`):
+
+| 指标 | 基准 | 迭代前 | 迭代后 | 误差 | <1% |
+|---|---|---|---|---|---|
+| He\*(2³S) 激发能 | NIST 19.8196 eV | ROHF 18.838 (−5.0%) | FCI/aVQZ 19.8729 | **+0.27%** | ✓ |
+| Li 电离能 | NIST 5.3917 eV | ROHF 5.342 (−0.9%) | FCI/aVQZ 5.3701 | **−0.40%** | ✓ |
+| He+Li⁺ 阱区 (R=5–9 bohr) | 参考样条 | RHF 2.41% | CCSD(T)+CP/aVQZ | **0.85%** | ✓ |
+| He+Li⁺ 全区间 | 参考样条 | RHF 2.8% | CCSD(T)+CP/aVQZ | 2.09% | ✗ |
+| He+Li⁺ 阱深 | 85.9 meV | — | 78.4 (CP) / 112.2 (无校正) | 包夹参考 | ✗ |
+| 自电离宽度 Γ(R) | 参考 MRCI | 解析模型(错) | CAP-CI 机制已验证 | 本共振不可分辨 | ✗ |
+
+阱区误差在 **三个独立基组一致** (aVTZ 0.81% / aVQZ 0.85% / def2-QZVPPD 0.82%)
+→ 该区间已收敛。**CAP-CI** (`scripts/cap_ci.py`) 已实现并在束缚态上验证正确
+(Γ 严格 ∝ η → 0)，但 He*+Li 共振 (Γ≈10 meV, 出射电子 14.4 eV) 在
+aug-cc-pVTZ + ≤11 轨道活性空间下不可分辨 — 定量 Γ 需专门连续谱基组
+或 Feshbach 投影 (见 [CHANGELOG](CHANGELOG.md) 0.20.2)。
+
 ## 热速率常数 (v0.16.0)
 
 ```python
