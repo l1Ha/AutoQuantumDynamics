@@ -10,7 +10,10 @@
 针对如 $\text{He}^* + \text{Li}$ 等处于电离连续谱中的亚稳态碰撞体系，`PySCFCalculator` 提供了高自旋约束与轨道锁定机制：
 - **高自旋约束与自旋锁定 (`spin_lock`)**: 支持严格 ROHF/ROKS 及 UHF/UKS，审计 $\langle S^2 \rangle$ 并拦截自旋污染，物理上消除四重态（$^4\Sigma^+$，$S=3/2$）的自电离变分塌陷；
 - **最大重叠法 (`use_mom=True`)**: 沿几何采样路径维持特定电子激发/占据组态，避免根翻转；
-- **复势能接口 (`resonance_width` / `complex_energy`)**: 支持提取自电离衰变宽度 $\Gamma(R)$ 与复光学势 $W(R) = V(R) - \frac{i}{2}\Gamma(R)$。
+- **复势能接口 (`resonance_width` / `complex_energy`)**: 支持表征自电离衰变宽度
+  $\Gamma(R)$ 与复光学势 $W(R) = V(R) - \frac{i}{2}\Gamma(R)$。
+  ⚠ **诚实边界**: 这是**解析模型接口**（指数/盒式），**不是**第一性原理共振计算——
+  CAP-CI/Feshbach 投影尚未实现；真实 $\Gamma(R)$ 需外部提供（如文献 MRCI 数据）。
 
 ```bash
 # 从 CLI 采样高自旋开壳层构型

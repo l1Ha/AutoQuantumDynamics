@@ -377,10 +377,19 @@ class PySCFCalculator(Calculator):
         return self._run(coords)[1]
 
     def resonance_width(self, coords: np.ndarray) -> float:
-        """估计或计算共振态电子自电离衰变宽度 Γ(R) (Hartree)。
+        """**解析模型接口** (非从头算) — 给出自电离宽度 Γ(R) 的经验估计 (Hartree)。
 
-        当提供 ``cap_params`` 时按模型或 CAP 势盒计算衰变宽度;
-        缺省或未配置时返回 0.0 (实势能面极限)。
+        ⚠ 诚实边界: 本方法不做 CAP-CI / Feshbach 投影等第一性原理共振计算,
+        只是在给定模型参数 (指数衰减或盒式 CAP) 下返回 Γ(R) 的解析值。
+        真实 Γ(R) 必须由外部提供 (文献 MRCI 数据或专门计算), 例如
+        He*+Li 的 ²Σ 通道 Γ 峰值 ≈ 10.6 meV, 指数尾斜率 k ≈ 2.87 Å⁻¹。
+
+        参数 (``cap_params``):
+        - ``{"type": "exponential", "A": ..., "beta": ..., "r_index": (i, j)}``
+          → Γ = A·exp(−β·R_ij);
+        - ``{"type": "box", "eta": ..., "r_cap": ...}`` → R > r_cap 时
+          Γ = 2η(R−r_cap)²;
+        未配置 ``cap_params`` 时返回 0.0 (实势能面极限)。
         """
         if not self.cap_params:
             return 0.0
