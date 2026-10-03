@@ -20,9 +20,17 @@ autoquantum sample --backend pyscf --input ref.xyz -o he_li_highspin.npz \
 
 **真实集群实测** (`scripts/calc_metastable_heli.py`，c211 → Slurm `liquid_high`)：
 He\*(2³S)+Li 四重态/双重态势能面 (aug-cc-pVTZ, 30 点 ROHF+spin_lock+MOM)，
-FCI 校验 He ³S–¹S = **19.88 eV**（实验 19.82 eV），渐近一致性 0.9 mHa，
-范德华阱 54 meV，垂直能隙 18.8→21.1 eV，全程 30.6 s。图见
-[book 第 4 章](book/chapters/04-电子结构基础.md)，原始数据 `book/data/he_li_metastable_pes.npz`。
+FCI 校验 He ³S–¹S = **19.88 eV**（实验 19.82 eV），渐近一致性 0.9 mHa，全程 30.6 s。
+
+> ⚠ **2026-10 校核更正**：早期报告的"54 meV 范德华阱"经 counterpoise 校正证伪——
+> 该"阱"为 BSSE 赝像，校正后 |V| < 1 meV；"18.8 eV 彭宁电子能量"标注有误，
+> 正确值为 **14.4279 eV + [V₂Σ − V⁺]**。与生产参考势（MRCI 4 通道 + HeLi⁺ +
+> MRCI 宽度）的完整校核见 `scripts/plot_heli_vs_reference.py`，
+> 图见 [book 第 4 章](book/chapters/04-电子结构基础.md)。
+
+**与生产参考数据 (Pro_HeLi_Enhanced) 的交叉校核**（`scripts/plot_heli_vs_reference.py`）：
+HeLi⁺ 离子通道互证通过（本工作 RHF −68 meV @ 3.6 bohr vs 参考 −86.5 meV @ 3.65 bohr）；
+本工作早期解析宽度模型 Γ=0.04e^(−1.1R) 与参考 MRCI 数据相差数个数量级，应改用后者。
 
 ```bash
 bash scripts/remote.sh sync && bash scripts/remote.sh submit liquid_high scripts/sbatch_he_li.sbatch

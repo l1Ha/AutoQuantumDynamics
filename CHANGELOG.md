@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.20.1 — He*+Li 结果校核与生产参考势交叉验证
+
+### Fixed (科学结论更正)
+
+- **⁴Σ⁺ "范德华阱 54 meV" 证伪**: counterpoise (CP) 校正显示 R=8/10/12 Bohr 处
+  BSSE 分别为 30/11/3 meV, 恰好构成 0.20.0 报告的"阱"; CP 校正后 |V| < 1 meV。
+  ⁴Σ⁺ 在 SCF/CASCI 层面无真实束缚。
+- **彭宁电子能量标注更正**: 正确值 $E_e = 14.4279\ \text{eV} + [V_{2\Sigma}-V^+]$
+  (14.4279 = He\*(2³S) 激发能 19.8196 − Li 电离能 5.3917); 0.20.0 中
+  "18.8 eV 垂直激发能隙 = 彭宁电子可用能量" 的概念混淆已更正 (差 4.4 eV)。
+- **解析宽度模型量级错误**: $\Gamma=0.04e^{-1.1R}$ Ha (R/bohr) 在 R=6 Bohr
+  处比参考 MRCI 数据小 5 个数量级且衰减过陡; 应改用 MRCI $\Gamma(R)$ 数据。
+
+### Added
+
+- **`scripts/validate_vs_reference_pes.py`**: ⁴Σ⁺/²Σ⁺/离子曲线 + CP 校正 +
+  片段状态自检 (全部 gto.M 显式 `unit="Bohr"`; 记录 PySCF 默认 Å 单位踩坑)。
+- **`scripts/plot_heli_vs_reference.py`**: 与生产参考数据 (Pro_HeLi_Enhanced:
+  MLR 4 通道 + HeLi⁺ 离子势 + MRCI 宽度) 的四联对比图, 含修正后的彭宁电子能量。
+- **CASCI(5e,12o) 轨道匹配方法**: 四重态轨道基组解 ⁴Σ⁺ (解离极限偏差 −0.00 mHa),
+  双重态轨道基组解基态 (偏差 −0.01 mHa); 揭示 R≈6 Bohr 处 ~330 meV 避免交叉势垒
+  (与 He(2³P)+Li 的 ⁴Σ⁺ 通道耦合), 解释短程 SCF 分支歧义的根源。
+
+### Findings (对参考生产数据的核对, 供上游确认)
+
+- **HeLi⁺ 离子通道互证通过**: 本工作 RHF 最小值 −68 meV @ 3.6 Bohr vs 参考
+  HeLip.txt 曲线 −86.5 meV @ 3.65 Bohr (差 ~20 meV, 符合 RHF 缺相关能预期)。
+- **参考 `potentials.py` 单位约定存在不一致**: 参数注释为 `R_e`/bohr、
+  `C6/C8/C10`/a.u., 代码却按 Angstrom 代入; 仅当解读为 "R_e 为 Angstrom +
+  C 为 eV·Angstrom⁶" 时, 四个通道的 MLR 指数才同为正值 (0.65–1.51, 物理自洽,
+  C6(³S)=3498 a.u.); 按字面混合单位则该指数全负 (−1.79~−2.65), 长程尾偏强
+  27 倍 (R=50 Bohr: −0.19 vs −0.006 meV), 短程排斥墙偏陡 (R=4 Bohr: +67 eV)。
+  建议核对原始拟合的单位约定。
+
 ## 0.20.0 — 亚稳态体系从头算: 高自旋锁定、MOM 与真实集群算例
 
 ### Added
@@ -22,8 +56,8 @@
   He\*(2³S)+Li 四重态/双重态势能面 (aug-cc-pVTZ, 30 点 ROHF+spin_lock+MOM 链),
   含原子渐近 FCI 校验、垂直能隙 $\Delta E(R)$、自电离宽度 $\Gamma(R)$ 与四联图;
   `--replot` 支持从 npz 离线重绘 (无需 pyscf)。已在 c211→liquid_high 实测:
-  FCI ³S–¹S = 19.88 eV (实验 19.82), 渐近一致性 0.9 mHa, vdW 阱 54 meV,
-  $\Delta E$ = 18.8→21.1 eV, 全程 30.6 s。
+  FCI ³S–¹S = 19.88 eV (实验 19.82), 渐近一致性 0.9 mHa, 全程 30.6 s。
+  **注: 早期报告的 vdW 阱 54 meV 已于 0.20.1 校核中证伪 (BSSE 赝像)。**
 - **测试**: 新增 8 项 PySCF Mock 测试 (方法分发/自旋锁定拦截/MOM setocc 格式/
   CAP 宽度/复能量), 共 109 项; 无需安装 pyscf 即可在 CI 全绿。
 
