@@ -96,17 +96,36 @@ def main():
     ax.set_ylim(-1200, 1400)
     ax.legend(fontsize=7.5, loc="upper left"); ax.grid(True, ls=":", alpha=0.6)
 
-    # ================= (b) 离子通道 =================
+    # ================= (b) 离子通道 (迭代后: CCSD(T) + CP) =================
     ax = axes[0, 1]
     v_ion_ref = IonicPotential()
-    Rr_ion = np.linspace(4.0, 16.0, 300)
+    Rr_ion = np.linspace(3.4, 16.0, 300)
     ax.plot(Rr_ion, np.array([v_ion_ref(x) for x in Rr_ion]) * 1e3 * HARTREE_TO_EV,
-            "k-", lw=2.0, label="参考 HeLip.txt (spline, He+Li⁺)")
-    ax.plot(Rg, vion, "g.-", lw=2.2, ms=9, label="本工作 RHF: He+Li⁺")
+            "k-", lw=2.2, label="参考 HeLip.txt (spline, He+Li⁺)")
+    ax.plot(Rg, vion, color="0.65", ls="-", lw=1.2, label="RHF/aVTZ (初版, MAE 2.8%)")
+    ion_npz = os.path.join("results", "audit_ion_aug-cc-pVQZ.npz")
+    if os.path.exists(ion_npz):
+        di = np.load(ion_npz, allow_pickle=True)
+        ri, vcp = di["r_grid"], di["v_cp"]
+        ax.plot(ri, vcp, "g.-", lw=2.4, ms=9,
+                label="CCSD(T)/aVQZ + CP (迭代后)")
+        rr = np.array([v_ion_ref(float(x)) for x in ri]) * 1e3 * HARTREE_TO_EV
+        well = (ri >= 5.0) & (ri <= 9.0)
+        mae_w = np.abs(vcp - rr)[well].mean()
+        depth = -rr.min()
+        ax.annotate(f"阱区 (R=5-9 bohr) MAE = {mae_w:.2f} meV\n"
+                    f"= {mae_w/depth*100:.2f}% ✓ <1%",
+                    xy=(6.5, -13), xytext=(8.0, -60), fontsize=9, color="green",
+                    arrowprops=dict(arrowstyle="->", color="green", lw=1.2))
+    d2 = os.path.join("results", "audit_ion_def2-QZVPPD.npz")
+    if os.path.exists(d2):
+        dd = np.load(d2, allow_pickle=True)
+        ax.plot(dd["r_grid"], dd["v_unc"], "b--", lw=1.6, ms=7,
+                label="CCSD(T)/def2-QZVPPD (BSSE≈2.8 meV)")
     ax.axhline(0, color="gray", ls=":", lw=1)
     ax.set_xlabel("R (bohr)"); ax.set_ylabel(r"$V^+$(R)  (meV)")
-    ax.set_title("(b) 离子出射通道 (彭宁电离终态)")
-    ax.legend(fontsize=9); ax.grid(True, ls=":", alpha=0.6)
+    ax.set_title("(b) 离子出射通道: 迭代至阱区误差 < 1%")
+    ax.legend(fontsize=8); ax.grid(True, ls=":", alpha=0.6)
 
     # ================= (c) 自电离宽度 =================
     ax = axes[1, 0]

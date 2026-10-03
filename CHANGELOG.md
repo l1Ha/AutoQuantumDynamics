@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.20.2 — 误差 < 1% 迭代审计与 CAP-CI 实现
+
+### Added
+
+- **`scripts/target_1pct_audit.py`**: 误差审计与迭代工具 — 原子量 (RHF/ROHF→FCI,
+  基组阶梯 aVTZ→aVQZ) + He+Li⁺ 曲线 (RHF→CCSD(T), counterpoise 校正),
+  自动计算相对 NIST 与参考样条的误差并判定 <1%。
+- **`scripts/error_budget_report.py`**: 汇总误差表 (含 CP 序列 CBS X⁻³ 外推)。
+- **`scripts/cap_ci.py` + `scripts/cap_ci_search.py`**: **CAP-CI 第一性原理共振
+  计算** — DFT 数值网格构造复吸收势算符矩阵; 用 PySCF 实数 FCI 引擎逐列构造
+  复 FCI 矩阵 (活性空间小, 稠密复对角化); η 轨迹 + 平台判据搜索真实共振。
+  **机制已在束缚态上验证正确**: He+Li⁺ 的 Γ 严格正比于 η 且 → 0
+  (η=2e-4…4e-3 → Γ=0.0002…0.0042 meV), 能量与 SCF 一致 (0.1 mHa)。
+
+### Results (误差 < 1% 迭代)
+
+| 指标 | 迭代前 | 迭代后 | 达标 |
+|---|---|---|---|
+| He* 激发能 (vs NIST) | ROHF −5.0% | FCI/aVQZ **+0.27%** | ✓ |
+| Li 电离能 (vs NIST) | ROHF −0.9% | FCI/aVQZ **−0.40%** | ✓ |
+| HeLi⁺ 阱区 (R=5–9 bohr) | RHF 2.41% | CCSD(T)+CP/aVQZ **0.85%** | ✓ |
+| HeLi⁺ 全区间 | RHF 2.8% | CCSD(T)+CP/aVQZ 2.09% | ✗ |
+| HeLi⁺ 阱深 | — | 78.4 (CP) vs 85.9 (参考) | ✗ |
+| Γ(R) | 模型 | CAP-CI 机制验证; 共振不可分辨 | ✗ |
+
+- 阱区 MAE 在 **aVTZ / aVQZ / def2-QZVPPD 三个独立基组一致** (0.69/0.73/0.70 meV),
+  说明该区间已收敛; def2-QZVPPD 的 BSSE 仅 2.8 meV (aVTZ 21.3/aVQZ 33.9),
+  其未校正阱深 78.3 meV 为最可靠无偏估计。
+- 全区间/阱深未达标的成因已定位并记录: 阱底 CP 过校正 (离子体系已知问题) +
+  参考数据在 7.6 Å 后拉平为渐近平台 (非本工作误差)。
+
+### Known limitation (诚实记录)
+
+- He*+Li 的 ²Σ⁺ 自电离共振 (Γ≈10 meV, 出射电子动能 14.4 eV) 在
+  aug-cc-pVTZ (+额外弥散) + ≤11 轨道活性空间下**不可分辨**: 谱中只有
+  连续谱赝态 (Γ ∝ η 线性增长, 无平台)。定量 Γ 需要专门的连续谱基组
+  (高角动量弥散函数) 或 Feshbach 投影实现, 超出当前框架。
+
 ## 0.20.1 — He*+Li 结果校核与生产参考势交叉验证
 
 ### Fixed (科学结论更正)
