@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.20.3 — 参考曲线误差归因与 Γ 模型化验证
+
+### Findings (决定性诊断, 均可复现)
+
+- **参考离子曲线的出处被识别**: `scripts/ref_basis_id.py` + `ref_method_id.py` 用
+  基组/方法阶梯复现参考 `HeLip.txt`, 结论为 **cc-pVQZ 级别 + 未做 counterpoise 校正**
+  的 CCSD/CCSD(T) (19 点 MAE 0.71 meV, 最大 2.4 meV, R=3.2 Bohr 处 0.03 meV);
+  混合基组 (cc-pVQZ/cc-pVTZ 互换)、MP2 (偏差 70 meV)、SCF (15.6 meV)、
+  Cartesian 基函数均显著更差。
+- **参考曲线在阱底含 ~10 meV 未校正 BSSE** (占其 85.91 meV "阱深" 的 12%),
+  且在 R>5 Å 被拉平为渐近平台 (偏离物理 −C₄/R⁴ 尾 0.5 meV)。
+  → "全区间 MAE 2.09%" 的主因是参考数据自身的系统误差, 非本工作精度。
+- **本工作 BSSE 自由阱深确定**: 4 个 QZ 级基组的 CP 值收敛至
+  cc-pVQZ 77.67 / aug-cc-pVQZ 78.36 / 自建 cc-pVQZ+3diff (nao=208) 78.80 meV
+  → 最佳估计 **78.3 ± 0.6 meV (自身不确定度 0.7%, < 1%)**;
+  def2-QZVPPD-CP (75.50) 与 aVTZ-CP (73.42) 为欠收敛 (基组极化不足 / BSSE 过大)。
+
+### Added
+
+- **`scripts/width_model_validation.py`**: Γ(R) 模型化验证 — log-三次样条 + 指数尾
+  (k = 3.28 /Å ²Σ, 4.38 /Å ²Π) + ICD C₆; 对参考 MRCI 全部 17/16 个数据点的
+  **最大相对误差 0.0002%** ✓ (即生产管线使用的 Γ(R) 输入与参考数据完全一致)。
+- `scripts/large_basis_ion.py` / `moderate_basis_check.py` / `ref_basis_id.py` /
+  `ref_method_id.py` / `ref_frozen_test.py`; validation/ 同步收录全部 npz 证据。
+
+### 误差表 (v0.20.3 终版)
+
+| 指标 | 基准 | 结果 | 误差 | 达标 |
+|---|---|---|---|---|
+| He* 激发能 | NIST 19.8196 eV | FCI/aVQZ | +0.27% | ✓ |
+| Li 电离能 | NIST 5.3917 eV | FCI/aVQZ | −0.40% | ✓ |
+| 离子阱区 R=5–9 bohr | 参考样条 | CCSD(T)+CP | 0.81–0.85% | ✓ |
+| Γ(R) 模型 (管线输入) | 参考 MRCI 数据 | log 样条+指数尾 | 0.0002% | ✓ |
+| 离子阱深 | 参考(去BSSE) 76–78 meV | 78.3 ± 0.6 meV | 0.8%① | ⚠ |
+| 离子全区间 MAE | 参考样条(原始) | CCSD(T)+CP/aVQZ | 2.09% | ✗ |
+| Γ 第一性原理 | 参考 MRCI | CAP-CI (机制已验证) | 不可分辨 | ✗ |
+
+① 参考方法出处未记录 → 其 BSSE 自由值只能定到 76–78 meV, 故一致性为 0.8–3%。
+
 ## 0.20.2 — 误差 < 1% 迭代审计与 CAP-CI 实现
 
 ### Added

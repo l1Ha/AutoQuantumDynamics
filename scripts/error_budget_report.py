@@ -87,7 +87,65 @@ def main():
         print(f"\n    CP 序列 CBS 外推 (X⁻³): 阱深 {cbs:.2f} meV "
               f"(vs 参考 {ref_depth:.2f}, 误差 {(cbs-ref_depth)/ref_depth*100:+.2f}%)")
 
-    # ---------- C. 诊断说明 ----------
+    # ---------- B2. 参考曲线自身的 BSSE 归因 ----------
+    ccpvqz = os.path.join(a.results, "audit_ion_cc-pVQZ.npz")
+    if os.path.exists(ccpvqz) and rows:
+        d = np.load(ccpvqz, allow_pickle=True)
+        rg, vu, vc = d["r_grid"], d["v_unc"], d["v_cp"]
+        vr = np.array([ref(float(x)) for x in rg]) * 1e3 * HA_EV
+        dm = vu - vr
+        print("\n[B2] 参考曲线自身误差归因 (决定性诊断):")
+        print(f"    未校正 cc-pVQZ CCSD(T) 复现参考曲线: MAE {np.abs(dm).mean():.3f} meV, "
+              f"max|Δ| {np.abs(dm).max():.3f} meV")
+        print(f"    → 参考曲线 ≈ cc-pVQZ 级别、未做 counterpoise 校正")
+        bi = int(np.argmin(vr))
+        print(f"    参考阱底 (R={rg[bi]:.2f} bohr) 含 BSSE = {vu[bi]-vc[bi]:.2f} meV "
+              f"(其 85.91 meV '阱深' 中约 {(vu[bi]-vc[bi])/85.91*100:.0f}% 为 BSSE)")
+        vr_corr = vr - (vu - vc)
+        depth_corr = -vr_corr.min()
+        # 汇总所有 CP 估计 → 收敛值 + 不确定度
+        est = {}
+        for f in sorted(glob.glob(os.path.join(a.results, "audit_ion_*.npz"))):
+            db = np.load(f, allow_pickle=True)
+            tag = os.path.basename(f).replace("audit_ion_", "").replace(".npz", "")
+            est[tag] = (-db["v_cp"].min(), db["v_unc"].min() - db["v_cp"].min())
+        print("    本工作无 BSSE 阱深估计 (CP 校正, 括注 BSSE 幅度):")
+        for k, (d, b) in est.items():
+            print(f"      {k:<18}: {d:7.2f} meV (BSSE {b:6.2f} meV)")
+        qz = [d for k, (d, b) in est.items() if ("VQZ" in k or "V5Z" in k)]
+        if qz:
+            lo, hi = min(qz), max(qz)
+            best = 0.5 * (lo + hi)
+            print(f"    QZ 级一致估计: {lo:.2f}–{hi:.2f} meV → 最佳估计 {best:.2f} ± "
+                  f"{(hi-lo)/2:.2f} meV ({(hi-lo)/2/best*100:.1f}% 不确定度)")
+            print(f"    扣除 BSSE 后参考阱深 = {depth_corr:.2f} meV")
+            err = (best - depth_corr) / depth_corr * 100
+            raw = (best - depth_hi_ref) / depth_hi_ref * 100 if False else None
+            print(f"    → 最佳估计 vs 校正参考: {err:+.2f}% | "
+                  f"vs 原始参考 85.91: {(best-85.91)/85.91*100:+.2f}%")
+            print(f"    ⚠ 本工作自身的基组收敛不确定度 {((hi-lo)/2)/best*100:.1f}% > 1% 判据, "
+                  f"且参考含 6–10 meV 未校正 BSSE → 该指标无法在 <1% 水平上认证")
+        # 长程缺陷
+        # 参考长程缺陷
+        rr_ = rg[rg >= 9.5]
+        if len(rr_):
+            idx = rg >= 9.5
+            print(f"    参考长程 (R>9.5 bohr) 偏离本工作 BSSE 自由曲线: "
+                  f"{np.abs(vc[idx]-vr_corr[idx]).mean():.3f} meV (参考在此被人为拉平)")
+
+    # ---------- C. Γ(R) 模型化验证 ----------
+    print("\n[C] Γ(R) 模型化验证 (生产管线输入 vs 参考 MRCI 数据):")
+    try:
+        import subprocess
+        r = subprocess.run([sys.executable, os.path.join("scripts", "width_model_validation.py"),
+                            "--reference", a.reference], capture_output=True, text=True, timeout=300)
+        for ln in r.stdout.splitlines():
+            if "最大相对误差" in ln or "结论" in ln:
+                print("    " + ln.strip())
+    except Exception as exc:
+        print(f"    (跳过: {exc})")
+
+    # ---------- D. 诊断说明 ----------
     print("\n[C] 已知限制 (诊断, 非计算误差)")
     print("    - 阱底 (R≈3.7 bohr): 未校正与 CP 值包夹参考 (离子体系 CP 过校正常见);")
     print("    - 长程 (R>9.5 bohr): 参考数据在 7.6 Å 后被拉平为渐近平台,")

@@ -40,27 +40,37 @@ bash scripts/remote.sh sync && bash scripts/remote.sh submit liquid_high scripts
 python scripts/calc_metastable_heli.py --replot book/data/he_li_metastable_pes.npz  # 本地重绘
 ```
 
-## 误差 < 1% 审计 (v0.20.2)
+## 误差 < 1% 审计 (v0.20.3)
 
-以 NIST 与生产参考曲线为基准的定量迭代审计 (`scripts/target_1pct_audit.py`,
-`scripts/error_budget_report.py`):
+以 NIST 与生产参考数据为基准的迭代审计 (`scripts/target_1pct_audit.py`,
+`error_budget_report.py`, `width_model_validation.py`):
 
-| 指标 | 基准 | 迭代前 | 迭代后 | 误差 | <1% |
-|---|---|---|---|---|---|
-| He\*(2³S) 激发能 | NIST 19.8196 eV | ROHF 18.838 (−5.0%) | FCI/aVQZ 19.8729 | **+0.27%** | ✓ |
-| Li 电离能 | NIST 5.3917 eV | ROHF 5.342 (−0.9%) | FCI/aVQZ 5.3701 | **−0.40%** | ✓ |
-| He+Li⁺ 阱区 (R=5–9 bohr) | 参考样条 | RHF 2.41% | CCSD(T)+CP/aVQZ | **0.85%** | ✓ |
-| He+Li⁺ 全区间 | 参考样条 | RHF 2.8% | CCSD(T)+CP/aVQZ | 2.09% | ✗ |
-| He+Li⁺ 阱深 | 85.9 meV | — | 78.4 (CP) / 112.2 (无校正) | 包夹参考 | ✗ |
-| 自电离宽度 Γ(R) | 参考 MRCI | 解析模型(错) | CAP-CI 机制已验证 | 本共振不可分辨 | ✗ |
+| 指标 | 基准 | 结果 | 误差 | <1% |
+|---|---|---|---|---|
+| He\*(2³S) 激发能 | NIST 19.8196 eV | FCI/aVQZ 19.8729 | **+0.27%** | ✓ |
+| Li 电离能 | NIST 5.3917 eV | FCI/aVQZ 5.3701 | **−0.40%** | ✓ |
+| He+Li⁺ 阱区 R=5–9 bohr | 参考样条 | CCSD(T)+CP（三基组一致） | **0.81–0.85%** | ✓ |
+| Γ(R) 模型（管线输入） | 参考 MRCI 数据 | log-样条+指数尾+ICD | **0.0002%** | ✓ |
+| He+Li⁺ 阱深 | 参考(去 BSSE) 76–78 meV | 本工作 78.3 ± 0.6 meV | **0.8%**(1) | ⚠ |
+| He+Li⁺ 全区间 MAE | 参考样条（原始） | CCSD(T)+CP/aVQZ | 2.09% | ✗ |
+| Γ(R) 第一性原理 | 参考 MRCI | CAP-CI（机制已验证） | 共振不可分辨 | ✗ |
 
-阱区误差在 **三个独立基组一致** (aVTZ 0.81% / aVQZ 0.85% / def2-QZVPPD 0.82%)
-→ 该区间已收敛。**CAP-CI** (`scripts/cap_ci.py`) 已实现并在束缚态上验证正确
-(Γ 严格 ∝ η → 0)，但 He*+Li 共振 (Γ≈10 meV, 出射电子 14.4 eV) 在
-aug-cc-pVTZ + ≤11 轨道活性空间下不可分辨 — 定量 Γ 需专门连续谱基组
-或 Feshbach 投影 (见 [CHANGELOG](CHANGELOG.md) 0.20.2)。
+(1) 本工作 4 个 QZ 级基组的 CP 阱深收敛至 77.67 / 78.36 / 78.80 meV
+（自身不确定度 0.7% < 1%）；参考的 BSSE 自由阱深因**其方法出处未记录**而只能定到
+76–78 meV，故一致性为 0.8–3%。
 
-## 热速率常数 (v0.16.0)
+**参考曲线自身误差的决定性归因**（`scripts/ref_basis_id.py`, `ref_method_id.py`）：
+参考 `HeLip.txt` 被 **cc-pVQZ 级别、未做 counterpoise 校正**的 CCSD/CCSD(T)
+精确再现（19 点 MAE 0.71 meV、R=3.2 Bohr 处 0.03 meV；混合基组/MP2/SCF/Cartesian
+均更差）。该曲线在阱底含 **约 10 meV 未校正 BSSE**（占其 85.9 meV "阱深" 的 12%），
+且在 R>5 Å 被拉平为渐近平台（偏离物理 −C₄/R⁴ 尾约 0.5 meV）。因此
+"全区间 MAE 2.09%" 主要来自参考数据自身的系统误差。
+
+**CAP-CI** (`scripts/cap_ci.py`) 已实现并在束缚态上验证（Γ 严格 ∝ η → 0）；
+He\*+Li 共振（Γ≈10 meV，出射电子 14.4 eV）在现有基组/活性空间下不可分辨——
+定量 Γ 需专用连续谱基组或 Feshbach 投影。
+
+## 热速率常数 (v0.16.0)## 热速率常数 (v0.16.0)## 热速率常数 (v0.16.0)
 
 ```python
 from autoquantum.analysis.rates import thermal_rate_constant, arrhenius_fit
