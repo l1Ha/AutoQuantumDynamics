@@ -70,6 +70,28 @@ python scripts/calc_metastable_heli.py --replot book/data/he_li_metastable_pes.n
 He\*+Li 共振（Γ≈10 meV，出射电子 14.4 eV）在现有基组/活性空间下不可分辨——
 定量 Γ 需专用连续谱基组或 Feshbach 投影。
 
+## 激发态: TD-DFT / TDHF (v0.27.0)
+
+```python
+calc = PySCFCalculator(["O","H","H"], basis="cc-pvdz", method="tddft",
+                       xc="b3lyp", nstates=6)
+e_exc_eV, f = calc.excitation_spectrum(coords)      # 激发能 + 振子强度
+
+calc_s = PySCFCalculator(..., method="tddft", nstates=6, state=0)
+E_excited = calc_s.energy(coords)   # 激发态总能量 → 扫描/优化/NEB/IRC 全可用
+```
+
+| 检验 | 结果 |
+|---|---|
+| H₂O/B3LYP 最低激发 | **7.605 eV vs 实验 ~7.4（2.8%）** ✓ |
+| H₂ B¹Σu⁺ 垂直激发 | **12.63 vs 文献 12.5 eV（1.0%）** ✓ |
+| 振子强度 | 非负、Σf = 0.558 < 10（TRK 上界）✓ |
+| 激发态曲线 | 平滑（max\|d²\|/max\|d¹\| = 0.251）；态序正确 ✓ |
+
+⚠ **已记录的限制**：① 未实现激发态根跟踪（态交叉时 `state` 身份会变，扫描应
+限制在态身份保持窗口内）；② TD-HF 对 Rydberg 态势阱形状不准（H₂ B 态实测
+0.9–2.2 Å 单调下降）——准确激发态势能面需 **EOM-CCSD/CASSCF**（后续项）。
+
 ## NEVPT2 动态相关 (v0.26.0)
 
 ```python

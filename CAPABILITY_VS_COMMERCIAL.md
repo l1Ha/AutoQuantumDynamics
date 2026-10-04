@@ -32,7 +32,8 @@
 | **CASPT2 / NEVPT2 (动态相关)** | ✓ | ✗ | ✓ **(新, NEVPT2)** | `pt2="nevpt2"`: CAS 参考 + 二阶微扰, **无侵入态**; H₂/CAS(8,2) 距 FCI 仅 **0.10 mHa** (CASSCF 0.36); LiH 改善 2.5-2.7×。⚠ PySCF 无 CASPT2 模块 (NEVPT2 为同层级稳健替代) |
 | MRCI / RASPT2 | ✓✓ | ✗ | ✗ | 变分式多参考 CI 未实现 |
 | **CASSCF / 多组态 SCF** | ✓ | ✓ | ✓ **(新)** | `method="casscf"` + `active_space=(ncas,nelecas)`; H₂ 解离区 CASSCF 误差 **0.9 mHa** vs RHF **105.6 mHa** (R=4 Bohr, 对 FCI); LiH 亦验证。⚠ 梯度默认**有限差分** (PySCF 无 CASSCF 解析梯度模块) |
-| 激发态 (EOM-CCSD / TD-DFT) | ✓ | ✓ | ✗ | PySCF 有 `tdscf`/`eom`, 未接入 |
+| **激发态 (TD-DFT / TDHF)** | ✓ | ✓ | ✓ **(新)** | `method="tddft"` + `nstates` + `state=k` (后者使扫描/优化等全部工作流可作用于激发态势能面); 垂直激发: H₂O/B3LYP **7.605 eV vs 实验 7.4 (2.8%)**, H₂/B 态 **12.63 vs 12.5 (1.0%)**; 振子强度与 TRK 上界已验证。⚠ 未实现根跟踪; TD-HF 对 Rydberg 态势阱形状不准 |
+| 激发态 (EOM-CCSD / CASSCF) | ✓ | ✓ | ✗ | 高精度激发态势能面所需 (TD-DFT 的 Rydberg 势阱不准) |
 | **几何优化 (极小点)** | ✓ | ✓ | ✓ **(新)** | BFGS + 解析梯度; H2O/N2/H2/CH4 验证 (真极小判据 + 文献) |
 | **谐振频率 / Hessian** | ✓ | ✓ | ✓ **(新)** | 数值 Hessian + 质量加权 + 平动转动投影; H2O 与实验谐振频率差 1.86%, 0 虚频 |
 | **内坐标扫描** | ✓ | ✓ | ✓ **(新)** | 刚性键长/键角、线性路径、**松弛扫描** (约束优化) → 含力训练集 |
@@ -59,6 +60,7 @@
 | v0.24.0 | **IRC 反应路径 / X2C 标量相对论** | IRC 双方向**完全一致**且 100% 单调；X2C vs 精确 Dirac: H 0.4%、He⁺ 1.0% |
 | v0.25.0 | **CASSCF 多参考** | H₂ 解离 R=4 Bohr: \|RHF−FCI\| 105.6 mHa → \|CASSCF−FCI\| **0.9 mHa** |
 | v0.26.0 | **NEVPT2 动态相关** | H₂/CAS(8,2) 距 FCI **0.10 mHa**; LiH 改善 2.5-2.7×; NEVPT2 R_e = 0.7645 Å < CASSCF 0.7704 Å (相关使键缩短); CASSCF FD 梯度交叉验证通过 (两路径同 R,**差 0.005%**) |
+| v0.27.0 | **TD-DFT/TDHF 激发态与激发态势能面** | H₂O 最低激发 **7.605 eV vs 实验 7.4 (2.8%)**; H₂ B 态垂直激发 **12.63 vs 12.5 eV (1.0%)**; 振子强度非负且 Σf < TRK 上界; 曲线平滑与态序正确; TD-HF vs FCI 方向/量级一致 |
 
 累计修复的真实 bug (均被验证抓出, 非事后补记):
 重复 `_run` 覆盖 · `frozen` API 误用 · `energy()` 误触发梯度 · NEB 切向负索引回绕 ·
@@ -169,5 +171,6 @@ E. 自然轨道占据数             R=4.0 Bohr: 0.742/0.377 (显著部分占据
    PySCF 无 CASSCF 解析梯度模块)。下一步: **CASPT2/NEVPT2 动态相关**。
 4. ~~标量相对论 (X2C)~~ — **v0.24.0 已完成** ✓ (相对论位移 vs 精确 Dirac 0.4-1.0%)。
 5. ~~CASPT2 / NEVPT2~~ — **v0.26.0 已完成 (NEVPT2)** ✓ (PySCF 无 CASPT2; NEVPT2 无侵入态)
-6. **激发态势能面 (TD-DFT / EOM-CCSD)**: 光化学 PES 的前置条件。
+6. ~~激发态势能面 (TD-DFT)~~ — **v0.27.0 已完成** ✓ (垂直激发/振子强度已验证)。
+   下一步: **EOM-CCSD/CASSCF 激发态** (TD-DFT 对 Rydberg 态势阱形状不准) 与**根跟踪**。
 7. **溶剂模型 (ddCOSMO/PCM)**: PySCF 提供 ddCOSMO, 接入成本低。

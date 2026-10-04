@@ -208,6 +208,7 @@ class PySCFCalculator(Calculator):
     支持能力:
     - **SCF 层**: RHF, ROHF, UHF, DFT (RKS/ROKS/UKS)
     - **多参考** (v0.25.0–v0.26.0): CASSCF + **NEVPT2 动态相关** — 键断裂/强关联
+    - **激发态** (v0.27.0): TD-DFT / TDHF (含解析梯度, `state=k` 即激发态势能面)
     - **相关方法** (v0.21.0): MP2, CCSD, CCSD(T) — 带解析核梯度
       (MP2: `grad.mp2`; CCSD/(T): `grad.ccsd`, 需在梯度前调用 `ccsd_t()`)
     - **高自旋约束与自旋锁定 (spin_lock)**: 开壳层自旋纯度审计, 防止态跃迁与自旋污染
@@ -225,7 +226,8 @@ class PySCFCalculator(Calculator):
         "ccsd_t": "ccsd(t)",
     }
     #: 纯 SCF 方法
-    _SCF_ONLY = ("rhf", "rohf", "uhf", "dft", "rks", "roks", "uks", "casscf")
+    _SCF_ONLY = ("rhf", "rohf", "uhf", "dft", "rks", "roks", "uks", "casscf",
+                 "tddft")
 
     def __init__(self, symbols: Sequence[str], basis: str = "sto-3g",
                  charge: int = 0, spin: int = 0, method: str = "rhf",
@@ -238,7 +240,8 @@ class PySCFCalculator(Calculator):
                  grad_t_mode: str = "fd", grad_t_h: float = 1e-4,
                  relativistic: Optional[str] = None,
                  active_space: Optional[Tuple[int, int]] = None,
-                 pt2: Optional[str] = None):
+                 pt2: Optional[str] = None,
+                 nstates: int = 5, state: Optional[int] = None):
         self.symbols = list(symbols)
         self.basis = basis
         self.charge = charge
@@ -273,6 +276,16 @@ class PySCFCalculator(Calculator):
             raise ValueError('pt2="nevpt2" 需要 method="casscf"')
         if method.lower() == "casscf" and grad_t_mode != "casci":
             # CASSCF/NEVPT2 默认走有限差分梯度 (PySCF 无解析梯度模块)
+            self.grad_t_mode = "fd"
+        # TD-DFT/TDHF 激发态 (v0.27.0): nstates=计算态数, state=选中的激发态
+        # (0-based; None = 基态, 保持默认行为不变)。指定 state 后 energy()
+        # 返回**激发态总能量** E_ref + E_exc[state], 因此扫描/优化/NEB/IRC/
+        # 频率等全部工作流可直接作用于**激发态势能面**。
+        self.nstates = int(nstates)
+        self.state = None if state is None else int(state)
+        if method.lower() == "tddft" and self.state is not None \
+                and grad_t_mode != "analytic":
+            # 激发态默认有限差分梯度 (PySCF 的 TD 梯度不支持按态选择)
             self.grad_t_mode = "fd"
 
         if self.method not in self._SCF_ONLY and self.method not in self._CORRELATED:
@@ -337,6 +350,16 @@ class PySCFCalculator(Calculator):
         elif m == "casscf":
             # CASSCF: 先用 RHF/ROHF 参考, 再由 _run 做多组态自洽
             mf = scf.RHF(mol) if self.spin == 0 else scf.ROHF(mol)
+        elif m == "tddft":
+            # TD-DFT/TDHF: xc 给定 → RKS 参考 + TDDFT; 否则 RHF + TDHF
+            if self.spin != 0:
+                raise CommandBackendError(
+                    'method="tddft" 目前仅支持闭壳层参考 (spin=0)')
+            if self.xc:
+                mf = dft.RKS(mol)
+                mf.xc = self.xc
+            else:
+                mf = scf.RHF(mol)
         else:
             raise ValueError(
                 f"未知 method: {self.method}; 支持 'rhf', 'rohf', 'uhf', "
@@ -429,6 +452,45 @@ class PySCFCalculator(Calculator):
                 self._ref_mo_coeff = self._initial_mo_coeff
                 self._ref_mo_occ = self._initial_mo_occ
 
+        # ---- TD-DFT / TDHF: 激发态 (可选 state → 激发态势能面) ----
+        if self.method == "tddft":
+            from pyscf.tdscf import rks as td_rks, rhf as td_rhf
+            td = td_rks.TDDFT(mf) if self.xc else td_rhf.TDHF(mf)
+            td.nstates = self.nstates
+            es = td.kernel()[0]                 # Hartree
+            self._last_td = td
+            f_osc = np.asarray(td.oscillator_strength(), dtype=float)
+            self.last_excitations = np.asarray(es, dtype=float)
+            self.last_oscillator_strengths = f_osc
+            if self.state is None:
+                return float(mf.e_tot), None
+            if not (0 <= self.state < len(es)):
+                raise CommandBackendError(
+                    f"state={self.state} 超出范围 (共 {len(es)} 个态)")
+            e_exc = float(mf.e_tot) + float(es[self.state])
+            if not need_grad:
+                return e_exc, None
+            # ⚠ PySCF 的 TD 梯度 (grad.tdrks/tdrhf) **不响应态选择**
+            # (实测设置 td.state 前后梯度完全相同) → 默认用中心有限差分,
+            # 保证对任意 state 都正确; grad_t_mode="analytic" 仅当明确只需
+            # 最低激发态时可用。
+            if self.grad_t_mode == "analytic":
+                from pyscf import grad as pyscf_grad
+                gmod = pyscf_grad.tdrks if self.xc else pyscf_grad.tdrhf
+                if self.state:
+                    td.state = self.state
+                g = gmod.Gradients(td).kernel()
+                return e_exc, np.asarray(lib.asarray(g), dtype=float).reshape(-1, 3)
+            g = np.zeros_like(coords_arr)
+            for i in range(coords_arr.shape[0]):
+                for j in range(3):
+                    cp, cm = coords_arr.copy(), coords_arr.copy()
+                    cp[i, j] += self.grad_t_h
+                    cm[i, j] -= self.grad_t_h
+                    g[i, j] = (self._energy_only(cp) - self._energy_only(cm)) / \
+                        (2 * self.grad_t_h)
+            return e_exc, g
+
         # ---- CASSCF: 多组态自洽场 (静态相关 / 键断裂) ----
         if self.method == "casscf":
             if not self.active_space:
@@ -484,6 +546,16 @@ class PySCFCalculator(Calculator):
             grad = mf.nuc_grad_method().kernel()
         grad_arr = np.asarray(lib.asarray(grad), dtype=float).reshape(-1, 3)
         return float(e), grad_arr
+
+    def excitation_spectrum(self, coords: np.ndarray):
+        """返回激发谱 ``(energies_eV, oscillator_strengths)`` (需 method="tddft")。"""
+        self._run(np.asarray(coords, dtype=float), need_grad=False)
+        e_exc = getattr(self, "last_excitations", None)
+        if e_exc is None:
+            raise CommandBackendError(
+                'excitation_spectrum 需要 method="tddft"')
+        return (e_exc * 27.211386245988,
+                np.asarray(self.last_oscillator_strengths))
 
     def _energy_only(self, coords: np.ndarray) -> float:
         """仅算能量 (供 CASSCF 有限差分梯度使用, 避免递归求梯度)。"""
@@ -637,6 +709,8 @@ class PySCFCalculator(Calculator):
             "active_space": (f"({self.active_space[0]},{self.active_space[1]})"
                              if self.active_space else "n/a"),
             "pt2": str(self.pt2 or "none"),
+            "nstates": (str(self.nstates) if self.method == "tddft" else "n/a"),
+            "state": (str(self.state) if self.method == "tddft" else "n/a"),
             "grad_t_mode": (self.grad_t_mode
                             if self.method in ("ccsd(t)", "ccsd_t") else "n/a"),
         }

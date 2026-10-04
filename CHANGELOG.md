@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.27.0 — TD-DFT / TDHF 激发态与激发态势能面
+
+### Added
+
+- **TD-DFT / TDHF** (`PySCFCalculator(method="tddft", xc=..., nstates=N,
+  state=k)`):
+  - `excitation_spectrum(coords)` → 激发能 (eV) 与振子强度;
+  - `state=k` (0-based) 时 `energy()` 返回**激发态总能量** E_ref + E_exc[k],
+    因此**全部既有工作流** (扫描/几何优化/NEB/IRC/频率) 可直接作用于
+    **激发态势能面**;
+  - `state=None` 保持原行为 (基态), 不影响既有调用。
+- 梯度: 默认**中心有限差分**。原因: PySCF 的 TD 梯度 (`grad.tdrks/tdrhf`)
+  **不响应态选择** (实测设置 `td.state` 前后梯度完全相同), 无法保证作用于
+  选定激发态; `grad_t_mode="analytic"` 保留给"只需最低激发态"的快速场景。
+- 仅支持闭壳层参考 (spin=0), 其他情况抛明确的 `CommandBackendError`。
+
+### Verified (服务器 Slurm 1558827, 73 s, exit 0)
+
+| 检验 | 结果 |
+|---|---|
+| H₂O/cc-pVDZ TD-DFT(B3LYP) 最低激发 | **7.605 eV vs 实验 ~7.4 eV（差 2.8%）** ✓ |
+| 振子强度 | 非负、存在亮态；Σf = 0.558 < 10（电子数, TRK 求和规则上界）✓ |
+| H₂ B¹Σu⁺ 垂直激发 (aug-cc-pVDZ) | **12.63 eV vs 文献 ~12.5 eV（差 1.0%）** ✓ |
+| 激发态曲线 | 平滑（max\|d²\|/max\|d¹\| = 0.251 < 0.5）；态序正确（全区间 E_exc > E_gs）✓ |
+| TD-HF vs FCI 首激发 | 方向正确（无相关能→系统性高估）且量级受限（H₂ 3.2 eV, LiH 0.9 eV）✓ |
+
+### Known limitations (诚实记录, 非框架缺陷)
+
+- **未实现激发态根跟踪 (root following)**: 沿扫描发生态交叉时 `state` 序号的
+  物理身份会改变 (TD-DFT 已知病理), 激发态扫描应限制在态身份保持的窗口内。
+- **TD-HF 对 Rydberg 态势阱形状不准**: 实测 H₂ B 态在 0.9–2.2 Å 单调下降
+  (未给出势阱); 准确的激发态势能面需要 **EOM-CCSD/CASSCF** — 已列为后续项。
+  垂直激发能与振子强度在 TD-DFT 下已验证准确。
+
 ## 0.26.0 — NEVPT2 动态相关 (CAS 参考之上) 与 CASSCF 梯度交叉验证
 
 ### Added
