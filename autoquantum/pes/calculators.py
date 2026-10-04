@@ -217,7 +217,8 @@ class PySCFCalculator(Calculator):
     支持能力:
     - **SCF 层**: RHF, ROHF, UHF, DFT (RKS/ROKS/UKS)
     - **多参考** (v0.25.0–v0.26.0): CASSCF + **NEVPT2 动态相关** — 键断裂/强关联
-    - **激发态** (v0.27.0): TD-DFT / TDHF (含解析梯度, `state=k` 即激发态势能面)
+    - **激发态** (v0.27.0–v0.29.0): TD-DFT/TDHF 与 **EOM-CCSD**; `state=k` 即
+      激发态势能面; `follow=True` 启用**根跟踪** (态交叉时保持物理身份)
     - **隐式溶剂** (v0.28.0): ddCOSMO (`solvent="water"` / `solvent_eps=78.4`)
     - **相关方法** (v0.21.0): MP2, CCSD, CCSD(T) — 带解析核梯度
       (MP2: `grad.mp2`; CCSD/(T): `grad.ccsd`, 需在梯度前调用 `ccsd_t()`)
@@ -234,6 +235,7 @@ class PySCFCalculator(Calculator):
         "ccsd": "ccsd",
         "ccsd(t)": "ccsd(t)",
         "ccsd_t": "ccsd(t)",
+        "eom-ccsd": "eom-ccsd",       # EOM-CCSD 激发态 (v0.29.0)
     }
     #: 纯 SCF 方法
     _SCF_ONLY = ("rhf", "rohf", "uhf", "dft", "rks", "roks", "uks", "casscf",
@@ -253,7 +255,8 @@ class PySCFCalculator(Calculator):
                  pt2: Optional[str] = None,
                  nstates: int = 5, state: Optional[int] = None,
                  solvent: Optional[str] = None,
-                 solvent_eps: Optional[float] = None):
+                 solvent_eps: Optional[float] = None,
+                 follow: bool = False):
         self.symbols = list(symbols)
         self.basis = basis
         self.charge = charge
@@ -295,6 +298,10 @@ class PySCFCalculator(Calculator):
         # 频率等全部工作流可直接作用于**激发态势能面**。
         self.nstates = int(nstates)
         self.state = None if state is None else int(state)
+        # 激发态根跟踪 (v0.29.0): follow=True 时按与上一几何的激发向量
+        # 最大重叠选根, 避免态交叉处 state 序号物理身份漂移
+        self.follow = bool(follow)
+        self._prev_exc_vec = None
         # ddCOSMO 隐式溶剂 (v0.28.0): solvent="water" 或 solvent_eps=78.4
         self.solvent = solvent
         if solvent is not None or solvent_eps is not None:
@@ -337,6 +344,24 @@ class PySCFCalculator(Calculator):
         self._ref_mo_occ = mo_occ
         self._initial_mo_coeff = mo_coeff
         self._initial_mo_occ = mo_occ
+
+    def _pick_root(self, energies: np.ndarray, vecs: np.ndarray) -> int:
+        """选根: 默认按 ``state``; ``follow=True`` 时按与上一几何激发向量的
+        最大重叠选根 (**根跟踪**), 避免态交叉处 state 序号物理身份漂移。
+        """
+        if self.state is None:
+            return 0
+        if not self.follow or self._prev_exc_vec is None:
+            return int(self.state)
+        prev = np.asarray(self._prev_exc_vec).ravel()
+        V = np.asarray(vecs)
+        if V.ndim == 1:
+            return int(self.state)
+        V = V.reshape(V.shape[0], -1)
+        if V.shape[1] != prev.size:            # 几何变化导致维度变化 → 放弃跟踪
+            return int(self.state)
+        ov = np.abs(V @ prev)
+        return int(np.argmax(ov))
 
     def _attach_solvent(self, obj, kind: str = "scf"):
         """把 ddCOSMO 溶剂接入 SCF / post-SCF / TD / CASSCF 对象。
@@ -448,7 +473,8 @@ class PySCFCalculator(Calculator):
             solver = mp.MP2(mf, frozen=frozen)
             return self._attach_solvent(solver, "post"), False
         mycc = cc.CCSD(mf, frozen=frozen)
-        return self._attach_solvent(mycc, "post"), ref == "ccsd(t)"
+        return (self._attach_solvent(mycc, "post"),
+                ref in ("ccsd(t)", "eom-ccsd"))
 
     def _run(self, coords: np.ndarray, need_grad: bool = True):
         """计算能量 (Hartree), 可选计算核梯度。
@@ -521,7 +547,14 @@ class PySCFCalculator(Calculator):
             if not (0 <= self.state < len(es)):
                 raise CommandBackendError(
                     f"state={self.state} 超出范围 (共 {len(es)} 个态)")
-            e_exc = float(mf.e_tot) + float(es[self.state])
+            # 根跟踪: 用 TD 激发向量与上一几何的最大重叠选根
+            vecs = getattr(td, "xy", None)
+            idx = int(self.state)
+            if vecs is not None:
+                V = np.asarray(vecs)
+                idx = self._pick_root(np.asarray(es), V)
+                self._prev_exc_vec = np.asarray(V[idx]).ravel().copy()
+            e_exc = float(mf.e_tot) + float(es[idx])
             if not need_grad:
                 return e_exc, None
             # ⚠ PySCF 的 TD 梯度 (grad.tdrks/tdrhf) **不响应态选择**
@@ -530,9 +563,9 @@ class PySCFCalculator(Calculator):
             # 最低激发态时可用。
             if self.grad_t_mode == "analytic":
                 from pyscf import grad as pyscf_grad
-                gmod = pyscf_grad.tdrks if self.xc else pyscf_grad.tdrhf
+                gmod = pyscf_grad.tdrks if self.xc else pyscf_grad.tdhf if False else pyscf_grad.tdrhf
                 if self.state:
-                    td.state = self.state
+                    td.state = idx
                 g = gmod.Gradients(td).kernel()
                 return e_exc, np.asarray(lib.asarray(g), dtype=float).reshape(-1, 3)
             g = np.zeros_like(coords_arr)
@@ -586,6 +619,36 @@ class PySCFCalculator(Calculator):
 
         # ---- 相关方法 (MP2 / CCSD / CCSD(T)): 能量与**相关梯度** ----
         solver, with_t = self._corr_solver(mf)
+        # ---- EOM-CCSD 激发态 (v0.29.0) ----
+        if self.method == "eom-ccsd":
+            from pyscf.cc import eom_rccsd
+            e_corr = float(solver.kernel()[0])
+            e_ref = float(mf.e_tot) + e_corr
+            if with_t:
+                e_ref += float(solver.ccsd_t())
+            eom = eom_rccsd.EOMEESinglet(solver)
+            es, vecs = eom.kernel(nroots=self.nstates)
+            es = np.asarray(es).ravel()
+            vecs = np.asarray(vecs)
+            idx = self._pick_root(es, vecs)
+            self.last_excitations = es
+            self.last_oscillator_strengths = np.zeros_like(es)
+            self._prev_exc_vec = vecs[idx].copy()
+            if self.state is None:
+                return float(e_ref), None
+            e_exc = e_ref + float(es[idx])
+            if not need_grad:
+                return e_exc, None
+            g = np.zeros_like(coords_arr)
+            for i in range(coords_arr.shape[0]):
+                for j in range(3):
+                    cp, cm = coords_arr.copy(), coords_arr.copy()
+                    cp[i, j] += self.grad_t_h
+                    cm[i, j] -= self.grad_t_h
+                    g[i, j] = (self._energy_only(cp) - self._energy_only(cm)) / \
+                        (2 * self.grad_t_h)
+            return e_exc, g
+
         if solver is not None:
             e = self._corr_energy(solver, with_t, mf)
             if not need_grad:
@@ -767,7 +830,10 @@ class PySCFCalculator(Calculator):
             "solvent": (f"{self.solvent or 'custom'} (eps={self.solvent_eps})"
                         if self.solvent_eps is not None else "none"),
             "nstates": (str(self.nstates) if self.method == "tddft" else "n/a"),
-            "state": (str(self.state) if self.method == "tddft" else "n/a"),
+            "state": (str(self.state)
+                      if self.method in ("tddft", "eom-ccsd") else "n/a"),
+            "follow": (str(self.follow)
+                       if self.method in ("tddft", "eom-ccsd") else "n/a"),
             "grad_t_mode": (self.grad_t_mode
                             if self.method in ("ccsd(t)", "ccsd_t") else "n/a"),
         }

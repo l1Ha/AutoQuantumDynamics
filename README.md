@@ -70,6 +70,25 @@ python scripts/calc_metastable_heli.py --replot book/data/he_li_metastable_pes.n
 He\*+Li 共振（Γ≈10 meV，出射电子 14.4 eV）在现有基组/活性空间下不可分辨——
 定量 Γ 需专用连续谱基组或 Feshbach 投影。
 
+## 激发态: EOM-CCSD (v0.29.0)
+
+```python
+calc = PySCFCalculator(["H","H"], basis="aug-cc-pvdz", method="eom-ccsd",
+                       nstates=4, state=0)      # EOM-EE 单重态
+E, g = calc.energy_and_gradient(coords)          # 梯度为有限差分
+```
+
+| 检验（Slurm 1558875, 668 s, exit 0） | 结果 |
+|---|---|
+| **EOM-CCSD vs FCI 单重态激发能** | H₂/aug-cc-pVDZ **偏差 0.000 eV（完全一致）** ✓ |
+| vs TD-DFT 交叉一致性 | H₂O/6-31G* 首激发 8.675 vs 8.061 eV（差 0.61）✓ |
+| 态身份保持窗口曲线 | 平滑（跳变比 0.129 < 0.3）；态序正确 ✓ |
+| FD 梯度可用性 | 窗口内优化 ΔE = −7.7 mHa，\|g\|max ↓ 65× ✓ |
+
+⚠ **负结果（如实记录）**：`follow=True` 的重叠判据根跟踪在 H₂ 交叉窗口**未能改善
+连续性**（跳变比 1.951 vs 固定序号 0.057）→ 根跟踪标注为**实验性**，**态身份漂移
+限制仍然存在**；改进方向为更细步长 + 微扰/对称性约束选根。
+
 ## 隐式溶剂: ddCOSMO (v0.28.0)
 
 ```python
