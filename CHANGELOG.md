@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.22.0 — PES 工作流: 几何优化、内坐标扫描、谐振频率、ECP
+
+### Added
+
+- **几何优化** (`pes/optimize.py`): BFGS + Armijo 回溯线搜索 (解析梯度);
+  可选步长上限防止跳入非物理区; 返回收敛信息与真极小判据。
+- **谐振频率 / 数值 Hessian**: 中心差分 Hessian + 质量加权 + 平动/转动投影;
+  `core/periodic.py` 收录 36 个元素的最常见同位素质量 (CODATA)。
+- **内坐标扫描** (`pes/scan.py`): `scan_bond` / `scan_angle` / `scan_path` /
+  `relaxed_scan_bond` (约束优化, 梯度投影) → 直接产出含能量与力的
+  `AbInitioData` (含 symbols 与 geometry, 可喂对称函数委员会拟合)。
+- **ECP / 赝势**: 混合基组 (如 `{"Au": "cc-pVDZ-PP", "H": "cc-pVDZ"}`) 可用,
+  PySCF 自动加载 ECP。
+- **CLI**: `autoquantum opt` / `scan` / `freq` 三个子命令 (+ `--frozen-core` 等
+  共用后端参数), 对标 Gaussian 的 `opt/freq/scan` 使用方式。
+- **测试**: 新增 `tests/test_optimize_scan.py` (12 项解析模型测试, 无需 pyscf):
+  二次型/Morse 极小、谐振子频率 √(k/μ)、同位素位移、3N−6 模式数、
+  扫描自洽与松弛约束 —— 本地总数 125。
+
+### Verified (服务器 Slurm 1558433 @ xc002, 800 s, exit 0, A–G 全绿)
+
+- 几何优化: H2O 收敛 |g|=7.8e-05 且逐坐标位移能量升高 (真极小);
+  H2/CCSD(T)/cc-pVQZ = 0.7417 Å (文献 0.7417); N2/CH4 亦通过。
+- 谐振频率: H2O/MP2/cc-pVDZ 1679/3854/3974 vs 实验谐振 1649/3832/3943 cm⁻¹
+  (最大偏差 1.86%), 虚频数 0。
+- 内坐标扫描: 键长扫描极小 vs 优化极小差 0.284%; 键角差 0.015°;
+  数据容器 (points/gradients/symbols/geometry) 完整。
+- 松弛扫描: 每点键长保持 2.2e-16 Bohr, 垂直梯度 9.1e-04 Ha/Bohr。
+- ECP: AuH/cc-pVDZ-PP 梯度 vs 有限差分 = 4.5e-07 Ha/Bohr。
+- 端到端: 81 点 MP2/cc-pVDZ 双坐标扫描 → NN 力训练 → 留出集 (17 点)
+  能量 RMSE 0.070 mHa = **0.178% of span** (判据 <1%), 力 RMSE 1.07%。
+
+### Fixed (由服务器测试抓出)
+
+- `relaxed_scan_bond` 的约束梯度投影在 3 原子模型下的广播错误 (测试用势已改为
+  通用成对势); 键长扫描的抛物拟合需按非谐性放宽容差 (谐振子用严格判据)。
+- 端到端拟合的梯度张量形状 (n, N, 3) → (n, 3N) 训练器约定。
+
 ## 0.21.0 — 相关方法后端 (MP2/CCSD/CCSD(T)) 与商用软件能力矩阵
 
 ### Added

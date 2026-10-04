@@ -1,0 +1,217 @@
+"""几何优化 / 谐振频率 / 内坐标扫描的解析模型单元测试 (无需 pyscf)。
+
+用已知答案的模型势验证:
+- 优化器能找到二次型极小;
+- 质量加权 Hessian 与 cm⁻¹ 换算正确 (谐振子频率 √(k/μ));
+- 键长扫描极小与解析 R_e 一致;
+- 同位素质量表与约化质量自洽。
+"""
+
+import unittest
+import numpy as np
+
+from autoquantum.pes.calculators import AnalyticCalculator
+from autoquantum.pes.optimize import (optimize_geometry, harmonic_frequencies,
+                                      numerical_hessian)
+from autoquantum.pes import scan as Scan
+from autoquantum.core.periodic import mass, AMU_TO_ME
+
+BOHR = 0.529177210903
+AU_FREQ_TO_CM = 219474.6313632
+
+
+def harmonic_calc(k: float, r_e: float):
+    """成对谐振子势 E = Σ_{i<j} k/2 (r_ij - r_e)^2 (任意原子数)。"""
+    def energy(c):
+        c = np.asarray(c, dtype=float)
+        tot = 0.0
+        for i in range(len(c)):
+            for j in range(i + 1, len(c)):
+                tot += 0.5 * k * (np.linalg.norm(c[i] - c[j]) - r_e) ** 2
+        return float(tot)
+
+    def grad(c):
+        c = np.asarray(c, dtype=float)
+        g = np.zeros_like(c)
+        for i in range(len(c)):
+            for j in range(i + 1, len(c)):
+                d = c[i] - c[j]
+                r = float(np.linalg.norm(d))
+                f = k * (r - r_e) * d / r
+                g[i] += f
+                g[j] -= f
+        return g
+
+    return AnalyticCalculator(energy, grad, name="harmonic")
+
+
+def morse_calc(de: float, alpha: float, r_e: float):
+    """成对 Morse 势 E = Σ_{i<j} D_e [1 - exp(-α(r_ij - r_e))]^2。"""
+    def energy(c):
+        c = np.asarray(c, dtype=float)
+        tot = 0.0
+        for i in range(len(c)):
+            for j in range(i + 1, len(c)):
+                r = float(np.linalg.norm(c[i] - c[j]))
+                tot += de * (1.0 - np.exp(-alpha * (r - r_e))) ** 2
+        return float(tot)
+
+    def grad(c):
+        c = np.asarray(c, dtype=float)
+        g = np.zeros_like(c)
+        for i in range(len(c)):
+            for j in range(i + 1, len(c)):
+                d = c[i] - c[j]
+                r = float(np.linalg.norm(d))
+                e = np.exp(-alpha * (r - r_e))
+                f = 2.0 * de * (1.0 - e) * alpha * e * d / r
+                g[i] += f
+                g[j] -= f
+        return g
+
+    return AnalyticCalculator(energy, grad, name="morse")
+
+
+class TestPeriodic(unittest.TestCase):
+    def test_isotope_masses(self):
+        self.assertAlmostEqual(mass("H"), 1.0078250319, places=9)
+        self.assertAlmostEqual(mass("C"), 12.0, places=9)
+        self.assertAlmostEqual(mass("O"), 15.99491461957, places=9)
+        self.assertGreater(mass("D"), mass("H"))
+
+    def test_unknown_element_raises(self):
+        with self.assertRaises(KeyError):
+            mass("Xx")
+        # extra 表可覆盖
+        self.assertAlmostEqual(mass("Xx", extra={"Xx": 5.0}), 5.0)
+
+
+class TestOptimizer(unittest.TestCase):
+    def test_finds_quadratic_minimum(self):
+        k, r_e = 0.5, 1.4
+        calc = harmonic_calc(k, r_e)
+        x0 = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+        opt, info = optimize_geometry(calc, x0, gtol=1e-8)
+        r = float(np.linalg.norm(opt[0] - opt[1]))
+        self.assertAlmostEqual(r, r_e, places=6)
+        self.assertTrue(info["converged"])
+        self.assertLess(info["grad_max"], 1e-6)
+        self.assertAlmostEqual(info["energy"], 0.0, places=10)
+
+    def test_morse_minimum_and_curvature(self):
+        de, alpha, r_e = 0.2, 1.0, 2.0
+        calc = morse_calc(de, alpha, r_e)
+        x0 = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.4]])
+        opt, info = optimize_geometry(calc, x0, gtol=1e-8)
+        self.assertAlmostEqual(float(np.linalg.norm(opt[0] - opt[1])), r_e,
+                               places=6)
+        # 极小处曲率 = 2 D_e α²
+        H = numerical_hessian(calc, opt, h=1e-3)
+        # 沿键方向的二阶导 (两原子相对位移)
+        self.assertAlmostEqual(abs(H[2, 2]), 2 * de * alpha ** 2, delta=1e-3)
+
+    def test_line_search_survives_bad_start(self):
+        calc = morse_calc(0.1, 0.8, 2.0)
+        x0 = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 5.0]])   # 远离极小
+        opt, info = optimize_geometry(calc, x0, gtol=1e-6)
+        self.assertAlmostEqual(float(np.linalg.norm(opt[0] - opt[1])), 2.0,
+                               places=5)
+
+
+class TestFrequencies(unittest.TestCase):
+    def test_diatomic_harmonic_frequency(self):
+        """ν = (1/2π)√(k/μ): 与解析值比较 (cm⁻¹)。"""
+        k, r_e = 0.35, 1.4            # Hartree/Bohr²
+        calc = harmonic_calc(k, r_e)
+        coords = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, r_e]])
+        freqs, info = harmonic_frequencies(calc, ["H", "H"], coords)
+        self.assertEqual(len(freqs), 1)                 # 线性双原子: 3N-5 = 1
+        mu = (mass("H") * mass("H") / (2 * mass("H"))) * AMU_TO_ME
+        nu_ref = np.sqrt(k / mu) * AU_FREQ_TO_CM
+        self.assertAlmostEqual(freqs[0], nu_ref, delta=1.0)
+        self.assertEqual(info["n_imag"], 0)
+
+    def test_isotope_shift(self):
+        """同位素取代: ν ∝ 1/√μ (H2 -> D2 应下降 √2 倍)。"""
+        k, r_e = 0.35, 1.4
+        calc = harmonic_calc(k, r_e)
+        coords = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, r_e]])
+        f_h, _ = harmonic_frequencies(calc, ["H", "H"], coords)
+        f_d, _ = harmonic_frequencies(calc, ["D", "D"], coords)
+        mu_h = mass("H") / 2 * AMU_TO_ME
+        mu_d = mass("D") / 2 * AMU_TO_ME
+        self.assertAlmostEqual(f_d[0] / f_h[0], np.sqrt(mu_h / mu_d),
+                               places=6)
+
+    def test_nonlinear_water_like_modes(self):
+        """非线性三原子: 应有 3N-6 = 3 个振动模式。"""
+        calc = morse_calc(0.1, 1.0, 2.0)
+        # 等边三角形 (边长 = r_e) 是成对 Morse 的极小
+        a = 2.0
+        coords = np.array([[0.0, 0.0, 0.0],
+                           [a, 0.0, 0.0],
+                           [a / 2, a * np.sqrt(3) / 2, 0.0]])
+        freqs, info = harmonic_frequencies(calc, ["H", "H", "H"], coords)
+        self.assertEqual(len(freqs), 3)
+        self.assertEqual(info["n_imag"], 0)
+
+
+class TestScan(unittest.TestCase):
+    def test_bond_scan_minimum_matches_analytic(self):
+        # 谐振子: 抛物拟合应精确复现 r_e
+        calc_h = harmonic_calc(0.3, 2.3)
+        grid = np.linspace(1.6, 3.2, 17)
+        c0 = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.3]])
+        dh = Scan.scan_bond(calc_h, ["H", "H"], c0, 0, 1, grid)
+        i = int(np.argmin(dh.energies))
+        sl = slice(max(0, i - 2), min(len(grid), i + 3))
+        coef = np.polyfit(grid[sl], dh.energies[sl], 2)
+        self.assertAlmostEqual(-coef[1] / (2 * coef[0]), 2.3, places=6)
+        # Morse: 非谐性使 5 点抛物拟合有 ~1% 偏差, 容差 0.03 Bohr
+        calc = morse_calc(0.15, 1.1, 2.3)
+        data = Scan.scan_bond(calc, ["H", "H"], c0, 0, 1, grid)
+        i = int(np.argmin(data.energies))
+        sl = slice(max(0, i - 2), min(len(grid), i + 3))
+        coef = np.polyfit(grid[sl], data.energies[sl], 2)
+        self.assertAlmostEqual(-coef[1] / (2 * coef[0]), 2.3, delta=0.03)
+        # 数据容器完整 (含梯度与符号)
+        self.assertEqual(data.points.shape, (17, 6))
+        self.assertEqual(data.gradients.shape, (17, 2, 3))
+        self.assertEqual(data.symbols, ["H", "H"])
+
+    def test_angle_scan(self):
+        calc = morse_calc(0.1, 1.0, 2.0)
+        sym = ["H", "H", "H"]
+        c0 = np.array([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.6, 1.8, 0.0]])
+        grid = np.linspace(60.0, 180.0, 13)
+        data = Scan.scan_angle(calc, sym, c0, 1, 0, 2, grid)
+        # 顶点 0: 扫描后角度应等于设定值
+        for k, a in enumerate(grid):
+            c = data.geometry[k]
+            u, v = c[1] - c[0], c[2] - c[0]
+            ang = np.degrees(np.arccos(u @ v / (np.linalg.norm(u) * np.linalg.norm(v))))
+            self.assertAlmostEqual(ang, a, places=6)
+
+    def test_path_scan_endpoints(self):
+        calc = morse_calc(0.1, 1.0, 2.0)
+        a = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.8]])
+        b = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 3.0]])
+        data = Scan.scan_path(calc, ["H", "H"], a, b, 5)
+        np.testing.assert_allclose(data.geometry[0], a)
+        np.testing.assert_allclose(data.geometry[-1], b)
+        self.assertEqual(data.points.shape[0], 5)
+
+    def test_relaxed_scan_preserves_bond(self):
+        """松弛扫描: 每点键长精确保持 (用模型势, 无需 pyscf)。"""
+        calc = morse_calc(0.12, 1.0, 2.1)
+        sym = ["H", "H"]
+        c0 = np.array([[0.0, 0.0, 0.0], [2.1, 0.0, 0.0]])
+        grid = np.linspace(1.9, 2.3, 3)
+        data = Scan.relaxed_scan_bond(calc, sym, c0, 0, 1, grid, gtol=1e-6)
+        for k, r in enumerate(grid):
+            got = float(np.linalg.norm(data.geometry[k][0] - data.geometry[k][1]))
+            self.assertAlmostEqual(got, r, places=9)
+
+
+if __name__ == "__main__":
+    unittest.main()

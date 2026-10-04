@@ -164,6 +164,36 @@ def main():
 
     sub.add_parser("backends", help="列出电子结构后端可用性")
 
+    # ---- opt: 几何优化 (极小点) ----
+    opt_parser = sub.add_parser("opt", help="几何优化 (BFGS, 解析梯度)")
+    _add_calc_args(opt_parser)
+    opt_parser.add_argument("-o", "--output", default="optimized.npz",
+                            help="输出 npz (含优化几何/能量/梯度)")
+    opt_parser.add_argument("--gtol", type=float, default=1e-5,
+                            help="梯度收敛阈值 (Hartree/Bohr)")
+    opt_parser.add_argument("--max-iter", type=int, default=200)
+
+    # ---- scan: 内坐标 PES 扫描 ----
+    sc_parser = sub.add_parser("scan", help="内坐标扫描 -> PES 训练集 (npz)")
+    _add_calc_args(sc_parser)
+    sc_parser.add_argument("--mode", default="bond",
+                           choices=["bond", "angle", "path", "relax-bond"],
+                           help="扫描类型")
+    sc_parser.add_argument("--atoms", type=int, nargs="+", default=None,
+                           help="原子索引: bond i j | angle i j k (顶点 j)")
+    sc_parser.add_argument("--range", type=float, nargs=2, default=None,
+                           help="扫描范围: 键长 (Bohr) 或键角 (度)")
+    sc_parser.add_argument("--n", type=int, default=11, help="扫描点数")
+    sc_parser.add_argument("--second", default=None,
+                           help="path 模式的第二几何 (XYZ, Bohr)")
+    sc_parser.add_argument("-o", "--output", default="scan.npz")
+
+    # ---- freq: 谐振频率 ----
+    fr_parser = sub.add_parser("freq", help="谐振频率 (数值 Hessian)")
+    _add_calc_args(fr_parser)
+    fr_parser.add_argument("--opt-first", action="store_true",
+                           help="先做几何优化再算频率")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -176,8 +206,101 @@ def main():
         return _fit_nn(args)
     elif args.command == "backends":
         return _show_backends()
+    elif args.command == "opt":
+        return _cmd_opt(args)
+    elif args.command == "scan":
+        return _cmd_scan(args)
+    elif args.command == "freq":
+        return _cmd_freq(args)
     else:
         parser.print_help()
+
+
+def _add_calc_args(p):
+    """opt/scan/freq 共用的后端参数。"""
+    p.add_argument("--backend", default="pyscf", choices=["pyscf", "xtb", "demo"])
+    p.add_argument("--input", required=True, help="几何 XYZ 文件 (Bohr)")
+    p.add_argument("--method", default="rhf",
+                   help="rhf/rohf/uhf/dft/rks/roks/uks/mp2/ccsd/ccsd(t)")
+    p.add_argument("--basis", default="cc-pvdz")
+    p.add_argument("--charge", type=int, default=0)
+    p.add_argument("--spin", type=int, default=0, help="2S = Na - Nb")
+    p.add_argument("--xc", default=None, help="DFT 泛函")
+    p.add_argument("--frozen-core", action="store_true", help="冻结核 (MP2/CCSD)")
+
+
+def _make_calc(args):
+    from autoquantum.pes.calculators import make_calculator
+    symbols, coords = _read_xyz(args.input)
+    if args.backend == "pyscf":
+        return symbols, coords, make_calculator(
+            "pyscf", symbols=symbols, basis=args.basis, charge=args.charge,
+            spin=args.spin, method=args.method, xc=args.xc,
+            frozen_core=args.frozen_core)
+    return symbols, coords, make_calculator(args.backend, symbols=symbols)
+
+
+def _cmd_opt(args):
+    import numpy as np
+    from autoquantum.pes.optimize import optimize_geometry
+    symbols, coords, calc = _make_calc(args)
+    print(f"体系: {len(symbols)} 原子 ({' '.join(symbols)}); "
+          f"{args.method}/{args.basis if args.backend == 'pyscf' else args.backend}")
+    opt, info = optimize_geometry(calc, np.asarray(coords), gtol=args.gtol,
+                                  max_iter=args.max_iter, verbose=True)
+    e, g = calc.energy_and_gradient(opt)
+    print(f"收敛: {info['converged']} | 迭代 {info['n_iter']} | "
+          f"E = {e:.8f} Ha | |g|max = {np.abs(g).max():.2e}")
+    print(f"优化几何 (Bohr):\n{np.array2string(opt, precision=6)}")
+    np.savez(args.output, coords=opt, energy=e, gradient=g, symbols=symbols,
+             converged=info["converged"], method=args.method, basis=args.basis)
+    print(f"已保存 → {args.output}")
+    return 0
+
+
+def _cmd_scan(args):
+    import numpy as np
+    from autoquantum.pes import scan as Scan
+    symbols, coords, calc = _make_calc(args)
+    c = np.asarray(coords)
+    if args.mode in ("bond", "relax-bond"):
+        i, j = (args.atoms or [0, 1])[:2]
+        lo, hi = args.range or (0.8, 2.5)
+        grid = np.linspace(lo, hi, args.n)
+        fn = (Scan.relaxed_scan_bond if args.mode == "relax-bond"
+              else Scan.scan_bond)
+        data = fn(calc, symbols, c, i, j, grid)
+    elif args.mode == "angle":
+        i, j, k = (args.atoms or [0, 1, 2])[:3]
+        lo, hi = args.range or (60.0, 180.0)
+        data = Scan.scan_angle(calc, symbols, c, i, j, k,
+                               np.linspace(lo, hi, args.n))
+    else:                                    # path
+        if not args.second:
+            raise SystemExit("path 模式需要 --second <XYZ>")
+        _, c2 = _read_xyz(args.second)
+        data = Scan.scan_path(calc, symbols, c, np.asarray(c2), args.n)
+    data.save_npz(args.output, provenance=calc.provenance)
+    print(f"扫描 {data.points.shape[0]} 点 → {args.output}; "
+          f"能量范围 [{data.energies.min():.6f}, {data.energies.max():.6f}] Ha")
+    return 0
+
+
+def _cmd_freq(args):
+    import numpy as np
+    from autoquantum.pes.optimize import (optimize_geometry,
+                                          harmonic_frequencies)
+    symbols, coords, calc = _make_calc(args)
+    c = np.asarray(coords)
+    if args.opt_first:
+        c, info = optimize_geometry(calc, c)
+        print(f"先优化: E = {info['energy']:.8f} Ha, |g|max = {info['grad_max']:.2e}")
+    freqs, finf = harmonic_frequencies(calc, symbols, c)
+    print(f"谐振频率 (cm^-1, {len(freqs)} 个模式):")
+    for k, f in enumerate(freqs, 1):
+        print(f"  mode {k:2d}: {f:10.2f}{'   (虚频)' if f < 0 else ''}")
+    print(f"虚频数 = {finf['n_imag']}")
+    return 0
 
 
 def _run_pipeline(args):

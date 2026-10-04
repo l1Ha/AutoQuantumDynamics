@@ -70,6 +70,45 @@ python scripts/calc_metastable_heli.py --replot book/data/he_li_metastable_pes.n
 He\*+Li 共振（Γ≈10 meV，出射电子 14.4 eV）在现有基组/活性空间下不可分辨——
 定量 Γ 需专用连续谱基组或 Feshbach 投影。
 
+## PES 工作流: 几何优化 / 内坐标扫描 / 谐振频率 (v0.22.0)
+
+从「笛卡尔位移网格」升级到商用软件式的工作流 (全部基于解析梯度):
+
+```bash
+# 几何优化 (BFGS, 极小点)
+autoquantum opt --input h2o.xyz --method ccsd(t) --basis cc-pvtz -o opt.npz
+
+# 内坐标扫描 → PES 训练集 (含能量与力)
+autoquantum scan --input h2o.xyz --method mp2 --basis cc-pvtz \
+    --mode bond --atoms 0 1 --range 0.9 2.2 --n 21 -o scan.npz
+autoquantum scan ... --mode angle --atoms 1 0 2 --range 80 140
+autoquantum scan ... --mode relax-bond --atoms 0 1   # 每点约束优化
+
+# 谐振频率 (数值 Hessian + 质量加权 + 平动转动投影)
+autoquantum freq --input h2o.xyz --method mp2 --basis cc-pvdz --opt-first
+```
+
+Python API:
+
+```python
+from autoquantum.pes.optimize import optimize_geometry, harmonic_frequencies
+from autoquantum.pes import scan as Scan
+opt, info = optimize_geometry(calc, coords0, gtol=1e-5)   # BFGS + Armijo
+freqs, finfo = harmonic_frequencies(calc, symbols, opt)   # cm⁻¹, 含虚频数
+data = Scan.relaxed_scan_bond(calc, symbols, opt, 0, 1, r_grid)  # → AbInitioData
+```
+
+**服务器验证** (Slurm 1558433 @ xc002, 800 s, exit 0, 6/6):
+
+| 检验 | 结果 |
+|---|---|
+| 几何优化 (BFGS) | H2O 收敛 \|g\|=7.8e-05 且为真极小; H2/CCSD(T)/cc-pVQZ = 0.7417 Å（文献 0.7417）✓ |
+| 谐振频率 | H2O/MP2/cc-pVDZ 1679/3854/3974 vs 实验谐振 1649/3832/3943 cm⁻¹（偏差 1.86%），0 虚频 ✓ |
+| 内坐标扫描自洽 | 键长扫描极小 vs 优化极小差 0.284%；键角差 0.015° ✓ |
+| 松弛扫描 | 每点键长保持 2.2e-16 Bohr；垂直梯度 9.1e-04 ✓ |
+| ECP / 赝势 | AuH (Au: cc-pVDZ-PP)：梯度 vs 有限差分 = **4.5e-07** ✓ |
+| 端到端 | 81 点 MP2 扫描 → 力训练 → 留出集能量 RMSE **0.178% of span**（判据 <1%），力 RMSE 1.07% ✓ |
+
 ## 相关方法后端: MP2 / CCSD / CCSD(T) (v0.21.0)
 
 `PySCFCalculator` 现已支持**相关波函数方法** (含核梯度), 面向 PES 生成的主力方法阶梯:
