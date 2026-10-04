@@ -140,6 +140,7 @@ def main():
                                help="自旋锁定允许的最大偏差 |<S^2> - S(S+1)| (默认 0.1)")
     sample_parser.add_argument("--mom", action="store_true",
                                help="启用最大重叠法 (MOM) 沿采样序列跟踪特定激发/占据态 (pyscf)")
+    _add_solvent_args(sample_parser)
 
     fit_parser = sub.add_parser(
         "fit", help="在数据集 (npz) 上训练 NN 势能代理面")
@@ -216,6 +217,34 @@ def main():
         parser.print_help()
 
 
+def _add_solvent_args(p):
+    """隐式溶剂参数 (sample/opt/scan/freq 共用; pyscf 后端)。"""
+    p.add_argument("--solvent", default=None,
+                   help="隐式溶剂名 (如 water/methanol; smd 必须用溶剂名)")
+    p.add_argument("--solvent-eps", type=float, default=None,
+                   help="溶剂介电常数 (直接指定; smd 不支持)")
+    p.add_argument("--solvent-model", default="ddcosmo",
+                   choices=["ddcosmo", "pcm", "ddpcm", "smd"],
+                   help="隐式溶剂模型 (默认 ddcosmo; smd 仅 SCF 层)")
+    p.add_argument("--pcm-variant", default="IEF-PCM",
+                   choices=["C-PCM", "IEF-PCM", "COSMO", "SS(V)PE"],
+                   help="PCM 变体 (仅 --solvent-model pcm)")
+
+
+def _solvent_kwargs(args):
+    """从 CLI 参数提取溶剂 kwargs (未指定溶剂时不传, 保持默认行为)。"""
+    if getattr(args, "solvent", None) is None \
+            and getattr(args, "solvent_eps", None) is None:
+        return {}
+    out = {"solvent_model": args.solvent_model,
+           "pcm_variant": args.pcm_variant}
+    if args.solvent is not None:
+        out["solvent"] = args.solvent
+    if args.solvent_eps is not None:
+        out["solvent_eps"] = args.solvent_eps
+    return out
+
+
 def _add_calc_args(p):
     """opt/scan/freq 共用的后端参数。"""
     p.add_argument("--backend", default="pyscf", choices=["pyscf", "xtb", "demo"])
@@ -227,6 +256,7 @@ def _add_calc_args(p):
     p.add_argument("--spin", type=int, default=0, help="2S = Na - Nb")
     p.add_argument("--xc", default=None, help="DFT 泛函")
     p.add_argument("--frozen-core", action="store_true", help="冻结核 (MP2/CCSD)")
+    _add_solvent_args(p)
 
 
 def _make_calc(args):
@@ -236,7 +266,7 @@ def _make_calc(args):
         return symbols, coords, make_calculator(
             "pyscf", symbols=symbols, basis=args.basis, charge=args.charge,
             spin=args.spin, method=args.method, xc=args.xc,
-            frozen_core=args.frozen_core)
+            frozen_core=args.frozen_core, **_solvent_kwargs(args))
     return symbols, coords, make_calculator(args.backend, symbols=symbols)
 
 
@@ -392,6 +422,7 @@ def _sample_data(args):
                 "spin_tol": args.spin_tol,
                 "use_mom": args.mom,
             })
+            kwargs.update(_solvent_kwargs(args))
     calc = make_calculator(args.backend, symbols=symbols, **kwargs)
     print(f"后端: {calc.name} {calc.provenance}")
 

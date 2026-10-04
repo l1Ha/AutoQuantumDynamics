@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.30.0 — PCM / ddPCM / SMD 溶剂模型
+
+### Added
+
+- **`solvent_model`** 选择隐式溶剂模型（默认 `"ddcosmo"` 保持向后兼容）：
+  - `"pcm"`：C-PCM / IEF-PCM / COSMO / SS(V)PE（`pcm_variant`），覆盖
+    SCF / post-SCF / TD-DFT / CASSCF 四类入口；
+  - `"ddpcm"`：domain-decomposition PCM（PySCF 标注 under testing）；
+    无解析梯度模块 → SCF 梯度自动走中心有限差分（实测解析值偏差 8.4e-04
+    ≈ 8% |g|max，即不含溶剂响应）；
+  - `"smd"`：SMD 全溶剂化模型（电静 + 空腔/色散/溶剂结构 CDS 非静电项），
+    需命名溶剂（eps 与参数集由 SMD 数据库决定），仅 SCF 层（其余入口明确报错）。
+- **CLI**：`sample` 与 `opt/scan/freq` 新增 `--solvent`、`--solvent-eps`、
+  `--solvent-model`、`--pcm-variant`。
+- `provenance` 记录 `solvent_model`/变体/eps（SMD 标注 eps 由数据库决定）。
+- 8 项 Mock 测试（模型分发 / PCM 变体与 eps 落位 / ddPCM 强制 FD /
+  SMD 命名溶剂校验与仅-SCF 边界 / 非法模型拒绝 / 气相路径不受影响），共 137 项。
+
+### Verified (服务器 Slurm 1558906, 278 s, exit 0, 8/8)
+
+| 组 | 结果 |
+|---|---|
+| A. ε→1 极限 | ddCOSMO/PCM **0.000000** kcal/mol；ddPCM（1+1e-6）−0.000000 ✓ |
+| B. 介电单调性 | ddCOSMO −2.52→−5.17；PCM −2.83→−7.20（ε=2→78.4）✓ |
+| C. 跨模型/变体 | ddCOSMO −5.17 / PCM −7.20 / ddPCM −4.82（比 1.49）；PCM 四变体展宽 1.34% ✓ |
+| D. 极性趋势 | H₂O ≫ CH₄ ≈ He（三模型一致）✓ |
+| E. Li⁺ Born 标度 | PCM 隐含半径 2.184 Å ≈ 1.2×r_vdW 自洽；ddCOSMO 1.348 Å ✓ |
+| F. 四类入口 | pcm/ddpcm 的 MP2/CASSCF 溶剂化能 + TD-DFT 位移（+0.60/+0.42 eV）✓ |
+| G. 梯度 | PCM 解析 vs FD **4.4e-07**；ddPCM FD 自洽且含溶剂响应；SMD **3.3e-07** ✓ |
+| H. SMD | CH₄/water **+2.19 vs 实验 +1.95**（疏水空腔项）；H₂O −8.84 vs −6.32 ⚠ 如实记录 |
+
+### Honest limits (如实记录)
+
+- PySCF SMD 为**实验性实现**（模块 `smd_experiment`）：H₂O 绝对值与实验差
+  ~2.5 kcal/mol（含标准态约定差异），故仅作数量级核查，不作定量精度主张；
+  梯度本身经 FD 验证正确（3.3e-07）。
+- ddPCM 在 PySCF 中标注 testing：ε=1 触发内部除零（用 ε=1+δ 验证极限）；
+  无解析梯度模块（FD 已按实测选定）。
+
 ## 0.29.0 — EOM-CCSD 激发态 (+ 根跟踪实验, 含负结果)
 
 ### Added

@@ -89,25 +89,36 @@ E, g = calc.energy_and_gradient(coords)          # 梯度为有限差分
 连续性**（跳变比 1.951 vs 固定序号 0.057）→ 根跟踪标注为**实验性**，**态身份漂移
 限制仍然存在**；改进方向为更细步长 + 微扰/对称性约束选根。
 
-## 隐式溶剂: ddCOSMO (v0.28.0)
+## 隐式溶剂: ddCOSMO / PCM / ddPCM / SMD (v0.28.0 → v0.30.0)
 
 ```python
 calc = PySCFCalculator(["O","H","H"], basis="6-31g*", method="mp2",
-                       solvent="water")      # 或 solvent_eps=78.3553
-E, g = calc.energy_and_gradient(coords)      # 溶剂化能量 + 梯度
+                       solvent="water")      # ddCOSMO (默认), 或 solvent_eps=78.3553
+calc = PySCFCalculator(["O","H","H"], basis="6-31g*", solvent_eps=78.4,
+                       solvent_model="pcm", pcm_variant="IEF-PCM")   # C-PCM/IEF-PCM/COSMO/SS(V)PE
+calc = PySCFCalculator(["O","H","H"], basis="6-31g*", solvent="water",
+                       solvent_model="smd")  # 全溶剂化 (含非静电项; 仅 SCF 层)
+E, g = calc.energy_and_gradient(coords)
 ```
 
 覆盖 **SCF / post-SCF(MP2,CCSD) / TD-DFT / CASSCF** 四条路径（PySCF 的四个入口各不相同，
-不支持的组合会明确报错而非静默退回气相），内置 11 种常见溶剂介电常数。
+不支持的组合会明确报错而非静默退回气相），内置 11 种常见溶剂介电常数；
+CLI 侧 `sample`/`opt`/`scan`/`freq` 均支持 `--solvent/--solvent-eps/--solvent-model/--pcm-variant`。
 
-| 检验（Slurm 1558838, 71 s, exit 0, 7/7） | 结果 |
+| 检验（Slurm 1558906, 278 s, exit 0, 8/8） | 结果 |
 |---|---|
-| ε→1 极限 | **0.000000** kcal/mol（严格成立）✓ |
-| 介电单调性 | −2.51 → −4.67 → −5.07 → −5.15 kcal/mol（ε=2→78.4）✓ |
-| 极性趋势 | H₂O −5.15 / CH₄ +0.01 / He −0.00 ✓ |
-| **离子 Born 标度** | Li⁺ −121.6 vs Born 估计 −102.5 → 比值 **1.19** ✓ |
-| 溶剂化梯度 vs 有限差分 | **3.6e-07** Ha/Bohr ✓ |
-| TD-DFT 溶剂位移 | 首激发 8.061 → 8.501 eV（+0.44 eV）✓ |
+| ε→1 极限 | ddCOSMO/PCM **0.000000**；ddPCM 0（ε=1 时 PySCF 除零 → 用 1+1e-6 逼近）✓ |
+| 介电单调性 | ddCOSMO −2.52→−5.17；PCM −2.83→−7.20 kcal/mol（ε=2→78.4）✓ |
+| 跨模型一致性 | ddCOSMO −5.17 / PCM −7.20 / ddPCM −4.82；PCM 四变体展宽 1.34% ✓ |
+| 极性趋势 | H₂O −7.20 / CH₄ −0.29 / He −0.00（PCM）✓ |
+| **Li⁺ Born 标度** | PCM 隐含半径 2.184 Å ≈ 1.2×r_vdW（vdw_scale=1.2 自洽）✓ |
+| 四类入口 | pcm/ddpcm 的 SCF/MP2/CASSCF + TD-DFT 位移（+0.60/+0.42 eV）全部可用 ✓ |
+| 溶剂化梯度 | PCM 解析 vs FD **4.4e-07**；ddPCM 无解析模块 → FD（含溶剂响应）✓ |
+| SMD 非静电项 | CH₄/water **+2.19 vs 实验 +1.95**（疏水空腔项）；H₂O −8.84 vs −6.32 ⚠ |
+
+⚠ 诚实边界：PySCF 的 SMD 实现自带 "experimental" 标注（`smd_experiment`），H₂O 绝对
+值与实验差 ~2.5 kcal/mol（含标准态约定差异），**不作定量精度主张**；ddPCM 在 PySCF
+中标注 "under testing"，其 ε=1 会内部除零（已记录）。
 
 ## 激发态: TD-DFT / TDHF (v0.27.0)
 

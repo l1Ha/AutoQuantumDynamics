@@ -219,7 +219,9 @@ class PySCFCalculator(Calculator):
     - **多参考** (v0.25.0–v0.26.0): CASSCF + **NEVPT2 动态相关** — 键断裂/强关联
     - **激发态** (v0.27.0–v0.29.0): TD-DFT/TDHF 与 **EOM-CCSD**; `state=k` 即
       激发态势能面; `follow=True` 启用**根跟踪** (态交叉时保持物理身份)
-    - **隐式溶剂** (v0.28.0): ddCOSMO (`solvent="water"` / `solvent_eps=78.4`)
+    - **隐式溶剂** (v0.28.0–v0.30.0): `solvent_model` = ddCOSMO (默认) /
+      **PCM** (C-PCM, IEF-PCM, COSMO, SS(V)PE) / **ddPCM** / **SMD**
+      (`solvent="water"` / `solvent_eps=78.4`)
     - **相关方法** (v0.21.0): MP2, CCSD, CCSD(T) — 带解析核梯度
       (MP2: `grad.mp2`; CCSD/(T): `grad.ccsd`, 需在梯度前调用 `ccsd_t()`)
     - **高自旋约束与自旋锁定 (spin_lock)**: 开壳层自旋纯度审计, 防止态跃迁与自旋污染
@@ -256,6 +258,8 @@ class PySCFCalculator(Calculator):
                  nstates: int = 5, state: Optional[int] = None,
                  solvent: Optional[str] = None,
                  solvent_eps: Optional[float] = None,
+                 solvent_model: str = "ddcosmo",
+                 pcm_variant: str = "IEF-PCM",
                  follow: bool = False):
         self.symbols = list(symbols)
         self.basis = basis
@@ -302,10 +306,38 @@ class PySCFCalculator(Calculator):
         # 最大重叠选根, 避免态交叉处 state 序号物理身份漂移
         self.follow = bool(follow)
         self._prev_exc_vec = None
-        # ddCOSMO 隐式溶剂 (v0.28.0): solvent="water" 或 solvent_eps=78.4
+        # 隐式溶剂: solvent="water" 或 solvent_eps=78.4
+        #   - solvent_model="ddcosmo" (默认, v0.28.0): ddCOSMO
+        #   - "pcm" (v0.30.0): C-PCM / IEF-PCM / COSMO / SS(V)PE (见 pcm_variant)
+        #   - "ddpcm" (v0.30.0): domain-decomposition PCM (PySCF 标注 testing)
+        #   - "smd" (v0.30.0): SMD 全溶剂化模型 (需命名溶剂; 仅 SCF 层; PySCF 实验性)
         self.solvent = solvent
-        if solvent is not None or solvent_eps is not None:
+        self.solvent_model = str(solvent_model).lower()
+        self.pcm_variant = str(pcm_variant)
+        if self.solvent_model not in ("ddcosmo", "pcm", "ddpcm", "smd"):
+            raise ValueError(
+                f"未知 solvent_model: {solvent_model!r}; 支持 "
+                "'ddcosmo', 'pcm', 'ddpcm', 'smd'")
+        if self.solvent_model == "pcm" and self.pcm_variant not in (
+                "C-PCM", "IEF-PCM", "COSMO", "SS(V)PE"):
+            raise ValueError(
+                f"未知 pcm_variant: {pcm_variant!r}; 支持 'C-PCM', "
+                "'IEF-PCM', 'COSMO', 'SS(V)PE'")
+        if self.solvent_model == "smd":
+            # SMD 的介电常数与非静电项 (CDS: cavitation/dispersion/solvent
+            # structure) 都由溶剂名从 PySCF SMD 数据库决定, 不能自定义 eps
+            if solvent is None:
+                raise ValueError(
+                    'solvent_model="smd" 需要命名溶剂 (如 solvent="water"); '
+                    "SMD 的非静电项需要溶剂的 Abraham 参数集")
             if solvent_eps is not None:
+                raise ValueError(
+                    'solvent_model="smd" 的 eps 由溶剂名从 SMD 数据库取得, '
+                    "不支持 solvent_eps")
+        if solvent is not None or solvent_eps is not None:
+            if self.solvent_model == "smd":
+                self.solvent_eps = None
+            elif solvent_eps is not None:
                 self.solvent_eps = float(solvent_eps)
             else:
                 key = str(solvent).lower()
@@ -316,6 +348,13 @@ class PySCFCalculator(Calculator):
                 self.solvent_eps = _SOLVENT_EPS[key]
         else:
             self.solvent_eps = None
+        # SCF 层解析溶剂梯度不可用时 (PySCF 无 pyscf/solvent/grad/<model>),
+        # 梯度退化为中心有限差分。实测 (Slurm 1558896, H2O/6-31G*, eps=78.4):
+        #   ddcosmo 3.6e-07 ✓ | pcm 4.2e-08 ✓ | ddpcm 8.4e-04 ✗ (≈8% |g|max,
+        #   返回的梯度不含 ddPCM 溶剂响应 → 必须 FD)。
+        self._solvent_fd_grad = (self.solvent_model == "ddpcm")
+        # ddPCM 附加限制: eps=1 时 PySCF 内部除零 (实测 ZeroDivisionError);
+        # 物理极限需用 eps=1+δ 逼近 (验证脚本用 1.000001)。
         if method.lower() == "tddft" and self.state is not None \
                 and grad_t_mode != "analytic":
             # 激发态默认有限差分梯度 (PySCF 的 TD 梯度不支持按态选择)
@@ -363,26 +402,59 @@ class PySCFCalculator(Calculator):
         ov = np.abs(V @ prev)
         return int(np.argmax(ov))
 
-    def _attach_solvent(self, obj, kind: str = "scf"):
-        """把 ddCOSMO 溶剂接入 SCF / post-SCF / TD / CASSCF 对象。
+    @property
+    def _solvent_active(self) -> bool:
+        """是否启用隐式溶剂 (SMD 只给溶剂名、不给 eps)。"""
+        return self.solvent is not None or self.solvent_eps is not None
 
-        PySCF 的四条入口不同: ``ddcosmo_for_scf`` 接 SCF 对象;
-        ``ddcosmo_for_post_scf``/``_for_tdscf``/``_for_casscf`` 接**方法对象**
-        (其 ``._scf`` 必须已带溶剂)。不支持的组合会明确报错而非静默回退气相。
+    def _solvent_desc(self) -> str:
+        """溶剂配置的单行描述 (provenance 用)。"""
+        if not self._solvent_active:
+            return "none"
+        if self.solvent_model == "smd":
+            return f"smd/{self.solvent} (eps 由 SMD 数据库)"
+        extra = f"/{self.pcm_variant}" if self.solvent_model == "pcm" else ""
+        return f"{self.solvent_model}{extra} (eps={self.solvent_eps})"
+
+    def _attach_solvent(self, obj, kind: str = "scf"):
+        """把隐式溶剂接入 SCF / post-SCF / TD / CASSCF 对象。
+
+        PySCF 的四条入口为 ``{model}_for_{scf|post_scf|tdscf|casscf}``;
+        不支持的组合 (如 SMD 仅提供 ``smd_for_scf``) 会明确报错而非静默回退气相。
         """
-        if self.solvent_eps is None:
+        if not self._solvent_active:
             return obj
-        from pyscf.solvent import ddcosmo
-        table = {"scf": ddcosmo.ddcosmo_for_scf,
-                 "post": ddcosmo.ddcosmo_for_post_scf,
-                 "td": ddcosmo.ddcosmo_for_tdscf,
-                 "casscf": ddcosmo.ddcosmo_for_casscf}
+        import importlib
+        model = self.solvent_model
+        mod = importlib.import_module(f"pyscf.solvent.{model}")
+        kind_full = {"post": "post_scf", "td": "tdscf"}.get(kind, kind)
+        fn = getattr(mod, f"{model}_for_{kind_full}", None)
+        if fn is None:
+            raise CommandBackendError(
+                f"溶剂模型 {model} 不支持 {kind} 入口 (PySCF 无 "
+                f"{model}_for_{kind_full}); SMD 目前仅支持 SCF 层")
+        solvent_obj = None
+        if model == "smd":
+            # SMD 的非静电项需要溶剂名对应参数集, 必须在构造溶剂对象时给出
+            try:
+                solvent_obj = mod.SMD(obj.mol, solvent=str(self.solvent).lower())
+            except Exception as exc:
+                raise CommandBackendError(
+                    f"SMD 溶剂 {self.solvent!r} 不可用 (不在 PySCF SMD "
+                    f"数据库中?): {exc}") from exc
         try:
-            out = table[kind](obj)
+            out = fn(obj) if solvent_obj is None else fn(obj, solvent_obj)
+        except CommandBackendError:
+            raise
         except Exception as exc:
             raise CommandBackendError(
-                f"ddCOSMO 无法接入 {kind} 对象 ({type(obj).__name__}): {exc}") from exc
-        out.with_solvent.eps = self.solvent_eps
+                f"溶剂模型 {model} 无法接入 {kind} 对象 "
+                f"({type(obj).__name__}): {exc}") from exc
+        ws = out.with_solvent
+        if model == "pcm":
+            ws.method = self.pcm_variant
+        if self.solvent_eps is not None:
+            ws.eps = self.solvent_eps
         return out
 
     def _mol(self, coords: np.ndarray):
@@ -441,7 +513,7 @@ class PySCFCalculator(Calculator):
 
         mf.conv_tol = self.conv_tol
         mf.max_cycle = self.max_cycle
-        if self.solvent_eps is not None:
+        if self._solvent_active:
             mf = self._attach_solvent(mf, "scf")
             mf.conv_tol = self.conv_tol
             mf.max_cycle = self.max_cycle
@@ -661,6 +733,17 @@ class PySCFCalculator(Calculator):
         else:
             if not need_grad:
                 return float(e), None
+            if self._solvent_fd_grad:
+                # PySCF 无该溶剂模型的解析梯度模块 (如 ddPCM) → 中心 FD
+                g = np.zeros_like(coords_arr)
+                for i in range(coords_arr.shape[0]):
+                    for j in range(3):
+                        cp, cm = coords_arr.copy(), coords_arr.copy()
+                        cp[i, j] += self.grad_t_h
+                        cm[i, j] -= self.grad_t_h
+                        g[i, j] = (self._energy_only(cp) - self._energy_only(cm)) / \
+                            (2 * self.grad_t_h)
+                return float(e), g
             grad = mf.nuc_grad_method().kernel()
         grad_arr = np.asarray(lib.asarray(grad), dtype=float).reshape(-1, 3)
         return float(e), grad_arr
@@ -827,8 +910,7 @@ class PySCFCalculator(Calculator):
             "active_space": (f"({self.active_space[0]},{self.active_space[1]})"
                              if self.active_space else "n/a"),
             "pt2": str(self.pt2 or "none"),
-            "solvent": (f"{self.solvent or 'custom'} (eps={self.solvent_eps})"
-                        if self.solvent_eps is not None else "none"),
+            "solvent": self._solvent_desc(),
             "nstates": (str(self.nstates) if self.method == "tddft" else "n/a"),
             "state": (str(self.state)
                       if self.method in ("tddft", "eom-ccsd") else "n/a"),

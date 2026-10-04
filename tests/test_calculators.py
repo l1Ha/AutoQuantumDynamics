@@ -387,5 +387,168 @@ class TestCorrelatedMethodDispatch(unittest.TestCase):
             mock_cc.nuc_grad_method.assert_not_called()
 
 
+class TestPySCFSolventModelsMock(unittest.TestCase):
+    """溶剂模型分发 (ddcosmo/pcm/ddpcm/smd) 的 Mock 隔离测试 (v0.30.0)。"""
+
+    def _get_mock_modules(self):
+        from unittest.mock import MagicMock
+        mods, mock_pyscf = TestPySCFCalculatorMock()._get_mock_modules()
+        mock_solvent = MagicMock()
+        mock_pyscf.solvent = mock_solvent
+        mods["pyscf.solvent"] = mock_solvent
+        for name in ("ddcosmo", "pcm", "ddpcm"):
+            sub = MagicMock()
+            setattr(mock_solvent, name, sub)
+            mods[f"pyscf.solvent.{name}"] = sub
+        # 真实 smd 模块只有 SCF 入口 (smd_for_scf) → 用 spec 复现该边界
+        mock_smd = MagicMock(
+            spec=["smd_for_scf", "SMD", "solvent_db", "LEBEDEV_ORDER"])
+        mock_solvent.smd = mock_smd
+        mods["pyscf.solvent.smd"] = mock_smd
+        return mods, mock_pyscf, mock_solvent
+
+    def _mock_mf(self, mock_pyscf, mock_solvent, e=-76.02):
+        from unittest.mock import MagicMock
+        mock_pyscf.gto.Mole.return_value = MagicMock()
+        mock_mf = MagicMock()
+        mock_mf.converged = True
+        mock_mf.kernel.return_value = e
+        mock_grad = MagicMock()
+        mock_grad.kernel.return_value = np.array([[0.01, 0.0, 0.0], [-0.01, 0.0, 0.0]])
+        mock_mf.nuc_grad_method.return_value = mock_grad
+        mock_pyscf.scf.RHF.return_value = mock_mf
+        # 溶剂入口返回同一个 mf (带 with_solvent), 模拟 PySCF 包装行为
+        for fn in (mock_solvent.ddcosmo.ddcosmo_for_scf,
+                   mock_solvent.pcm.pcm_for_scf,
+                   mock_solvent.ddpcm.ddpcm_for_scf,
+                   mock_solvent.smd.smd_for_scf):
+            fn.return_value = mock_mf
+        return mock_mf
+
+    def test_pcm_dispatch_sets_variant_and_eps(self):
+        import sys
+        from unittest.mock import patch
+        from autoquantum.pes.calculators import _SOLVENT_EPS
+        mods, mock_pyscf, mock_solvent = self._get_mock_modules()
+        mock_mf = self._mock_mf(mock_pyscf, mock_solvent)
+
+        with patch.dict(sys.modules, mods):
+            calc = make_calculator("pyscf", symbols=["O", "H", "H"],
+                                   basis="6-31g*", solvent="water",
+                                   solvent_model="pcm", pcm_variant="C-PCM")
+            coords = np.array([[0., 0., 0.], [0., 0., 1.4], [0., 1.0, -0.4]])
+            calc.energy(coords)
+            mock_solvent.pcm.pcm_for_scf.assert_called_once()
+            # PCM 变体与介电常数都必须落到溶剂对象上
+            ws = mock_mf.with_solvent
+            self.assertEqual(ws.method, "C-PCM")
+            self.assertAlmostEqual(ws.eps, _SOLVENT_EPS["water"])
+            self.assertIn("pcm/C-PCM", calc.provenance["solvent"])
+            self.assertIn(str(_SOLVENT_EPS["water"]), calc.provenance["solvent"])
+
+    def test_ddpcm_uses_fd_gradient(self):
+        import sys
+        from unittest.mock import patch
+        mods, mock_pyscf, mock_solvent = self._get_mock_modules()
+        mock_mf = self._mock_mf(mock_pyscf, mock_solvent)
+
+        with patch.dict(sys.modules, mods):
+            calc = make_calculator("pyscf", symbols=["O", "H", "H"],
+                                   solvent_eps=78.4, solvent_model="ddpcm")
+            self.assertTrue(calc._solvent_fd_grad)
+            coords = np.array([[0., 0., 0.], [0., 0., 1.4], [0., 1.0, -0.4]])
+            calc.energy_and_gradient(coords)
+            # FD 路径 = 每扰动点一次 SCF (3 原子 → 19 次), 而非 1 次解析梯度
+            self.assertGreaterEqual(mock_solvent.ddpcm.ddpcm_for_scf.call_count, 7)
+            # ddPCM 无解析溶剂梯度模块 → 不得调用 nuc_grad_method
+            mock_mf.nuc_grad_method.assert_not_called()
+
+    def test_analytic_solvent_gradients_kept_for_ddcosmo_pcm(self):
+        import sys
+        from unittest.mock import patch
+        for model in ("ddcosmo", "pcm"):
+            mods, mock_pyscf, mock_solvent = self._get_mock_modules()
+            mock_mf = self._mock_mf(mock_pyscf, mock_solvent)
+            with patch.dict(sys.modules, mods):
+                calc = make_calculator("pyscf", symbols=["O", "H", "H"],
+                                       solvent_eps=78.4, solvent_model=model)
+                self.assertFalse(calc._solvent_fd_grad)
+                coords = np.array([[0., 0., 0.], [0., 0., 1.4], [0., 1.0, -0.4]])
+                calc.gradient(coords)
+                mock_mf.nuc_grad_method.assert_called_once()
+
+    def test_smd_requires_named_solvent(self):
+        import sys
+        from unittest.mock import patch
+        mods, mock_pyscf, mock_solvent = self._get_mock_modules()
+        self._mock_mf(mock_pyscf, mock_solvent)
+        with patch.dict(sys.modules, mods):
+            with self.assertRaises(ValueError) as ctx:
+                make_calculator("pyscf", symbols=["O", "H", "H"],
+                                solvent_model="smd")
+            self.assertIn("命名溶剂", str(ctx.exception))
+            with self.assertRaises(ValueError) as ctx2:
+                make_calculator("pyscf", symbols=["O", "H", "H"],
+                                solvent="water", solvent_eps=78.4,
+                                solvent_model="smd")
+            self.assertIn("solvent_eps", str(ctx2.exception))
+
+    def test_smd_post_scf_entry_rejected(self):
+        import sys
+        from unittest.mock import MagicMock, patch
+        mods, mock_pyscf, mock_solvent = self._get_mock_modules()
+        self._mock_mf(mock_pyscf, mock_solvent)
+        with patch.dict(sys.modules, mods):
+            calc = make_calculator("pyscf", symbols=["O", "H", "H"],
+                                   solvent="water", solvent_model="smd")
+            # 非 SCF 入口必须明确报错 (而非静默回退气相)
+            with self.assertRaises(CommandBackendError) as ctx:
+                calc._attach_solvent(MagicMock(), "post")
+            self.assertIn("SCF", str(ctx.exception))
+            # SCF 入口正常, 且溶剂对象由 SMD 构造 (含非静电项参数集)
+            calc._attach_solvent(MagicMock(), "scf")
+            self.assertEqual(
+                mock_solvent.smd.SMD.call_args.kwargs["solvent"], "water")
+
+    def test_smd_unknown_solvent_gives_informative_error(self):
+        import sys
+        from unittest.mock import MagicMock, patch
+        mods, mock_pyscf, mock_solvent = self._get_mock_modules()
+        self._mock_mf(mock_pyscf, mock_solvent)
+        mock_solvent.smd.SMD.side_effect = RuntimeError("nosuch is not available in SMD")
+        with patch.dict(sys.modules, mods):
+            calc = make_calculator("pyscf", symbols=["O", "H", "H"],
+                                   solvent="nosuch", solvent_model="smd")
+            with self.assertRaises(CommandBackendError) as ctx:
+                calc._attach_solvent(MagicMock(), "scf")
+            self.assertIn("SMD", str(ctx.exception))
+
+    def test_invalid_model_and_variant_rejected(self):
+        import sys
+        from unittest.mock import patch
+        mods, mock_pyscf, mock_solvent = self._get_mock_modules()
+        self._mock_mf(mock_pyscf, mock_solvent)
+        with patch.dict(sys.modules, mods):
+            with self.assertRaises(ValueError):
+                make_calculator("pyscf", symbols=["H", "H"],
+                                solvent="water", solvent_model="cosmo2")
+            with self.assertRaises(ValueError):
+                make_calculator("pyscf", symbols=["H", "H"],
+                                solvent="water", solvent_model="pcm",
+                                pcm_variant="IEFPCM")
+
+    def test_no_solvent_keeps_gas_phase_path(self):
+        import sys
+        from unittest.mock import patch
+        mods, mock_pyscf, mock_solvent = self._get_mock_modules()
+        self._mock_mf(mock_pyscf, mock_solvent)
+        with patch.dict(sys.modules, mods):
+            calc = make_calculator("pyscf", symbols=["H", "H"], method="rhf")
+            coords = np.array([[0., 0., 0.], [0., 0., 1.4]])
+            calc.energy(coords)
+            mock_solvent.ddcosmo.ddcosmo_for_scf.assert_not_called()
+            self.assertEqual(calc.provenance["solvent"], "none")
+
+
 if __name__ == "__main__":
     unittest.main()
