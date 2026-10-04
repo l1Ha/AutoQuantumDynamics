@@ -14,7 +14,7 @@ from autoquantum.pes.calculators import AnalyticCalculator
 from autoquantum.pes.optimize import (optimize_geometry, harmonic_frequencies,
                                       numerical_hessian)
 from autoquantum.pes import scan as Scan
-from autoquantum.pes.neb import neb_path, _tangents
+from autoquantum.pes.neb import neb_path, irc_path, _tangents
 from autoquantum.core.periodic import mass, AMU_TO_ME
 
 BOHR = 0.529177210903
@@ -266,6 +266,29 @@ class TestNEB(unittest.TestCase):
         # 全部应指向 +x (路径单调)
         for i in range(3):
             self.assertGreater(tau[i][0, 0], 0.99)
+
+    def test_leps_irc_symmetry_and_monotonicity(self):
+        """IRC: 对称反应双方向应单调下降且结果镜像一致 (质量加权换算与
+        方向符号的正确性检验; 写错会成为"停滞在 TS"或"飞出"两类故障)。"""
+        calc = self._leps_calc()
+        r_ts = 2.212
+        ts = np.array([[0.0, 0.0, 0.0], [r_ts, 0.0, 0.0], [2 * r_ts, 0.0, 0.0]])
+        res = {}
+        for d in (+1, -1):
+            path, info = irc_path(calc, ["H"] * 3, ts, step=0.08,
+                                  max_steps=300, direction=d)
+            e = info["energies"]
+            frac = float(np.mean(np.diff(e) <= 1e-6))
+            self.assertGreater(frac, 0.98)          # 单调 (无之字形)
+            self.assertGreater(e[0] - e[-1], 0.03)  # 确实向下走了
+            res[d] = (e[0] - e[-1], path[-1][:, 0].copy())
+        # 对称反应: 两个方向的能量下降量应一致
+        self.assertAlmostEqual(res[+1][0], res[-1][0], places=6)
+        # 几何互为镜像: R01(+1) ≈ R12(-1)
+        p1, m1 = res[+1][1], res[-1][1]
+        r01_p = abs(p1[0] - p1[1]); r12_p = abs(p1[1] - p1[2])
+        r01_m = abs(m1[0] - m1[1]); r12_m = abs(m1[1] - m1[2])
+        self.assertAlmostEqual(r01_p, r12_m, delta=1e-6)
 
     def test_leps_barrier_and_saddle(self):
         from autoquantum.pes.leps import LEPSBuilder

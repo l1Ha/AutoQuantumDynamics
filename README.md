@@ -70,6 +70,31 @@ python scripts/calc_metastable_heli.py --replot book/data/he_li_metastable_pes.n
 He\*+Li 共振（Γ≈10 meV，出射电子 14.4 eV）在现有基组/活性空间下不可分辨——
 定量 Γ 需专用连续谱基组或 Feshbach 投影。
 
+## IRC 与 X2C 标量相对论 (v0.24.0)
+
+```python
+from autoquantum.pes.neb import irc_path
+path, info = irc_path(calc, symbols, ts_coords, step=0.08, direction=-1)
+# path[0] = 过渡态; 沿虚频方向双向积分即得完整反应路径
+
+calc = PySCFCalculator(symbols, basis="cc-pvdz", method="rhf",
+                       relativistic="x2c")     # X2C 标量相对论
+```
+
+**服务器验证**（Slurm 1558653 / 1558690）：
+
+| 检验 | 结果 |
+|---|---|
+| LEPS IRC 双方向 | ΔE = −0.0900 Ha，**单调 100%**，两方向**结果完全一致**（对称反应镜像自洽）✓ |
+| H₃/CCSD IRC | 两端 100% 单调；片段 H–H 由 TS 的 0.9422 Å 收敛到 0.7956 Å（优化 H₂ 0.7609 Å）✓ |
+| IRC 顶点 | 首步 Δ = −2426 µHa ✓ |
+| **X2C vs 精确 Dirac** | H(Z=1) −6.633 vs −6.657 µHa（**0.4%**）；He⁺(Z=2) −107.535 vs −106.514 µHa（**1.0%**）✓ |
+| X2C 梯度 vs FD | H2O/cc-pVDZ 7.9e-07 Ha/Bohr ✓ |
+
+修复 IRC 的**两处真实 bug**（解析面快速迭代抓出）：① 质量加权换算方向写反
+（`*√m` 应为 `/√m`，会让路径"飞出"）；② 初始步向量未带方向符号导致反向路径
+**停滞在过渡态**。改用 Ishida–Morokuma 平均梯度后消除之字形振荡。
+
 ## 过渡态搜索: CI-NEB (v0.23.0)
 
 ```python

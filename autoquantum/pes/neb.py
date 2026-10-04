@@ -185,3 +185,73 @@ def imaginary_mode_count(calc, symbols: Sequence[str], coords: np.ndarray,
     freqs, info = harmonic_frequencies(calc, symbols, coords, h=h,
                                        extra_masses=extra_masses)
     return info["n_imag"]
+
+
+# ---------------------------------------------------------------------------
+# IRC (Intrinsic Reaction Coordinate) — 从过渡态沿虚频方向向下积分
+# ---------------------------------------------------------------------------
+
+def irc_path(calc, symbols: Sequence[str], coords_ts: np.ndarray,
+             step: float = 0.06, max_steps: int = 120, direction: int = +1,
+             extra_masses=None, h_hess: float = 2e-3,
+             ) -> Tuple[np.ndarray, Dict]:
+    """从过渡态积分内禀反应坐标 (质量加权最速下降, Ishida–Morokuma 型)。
+
+    步骤:
+    1. 数值 Hessian → 质量加权最低本征矢 = 虚频模式 (反应坐标方向);
+    2. 沿该方向位移 ``step`` 打破鞍点;
+    3. 迭代: 在质量加权坐标中沿 ∓∇E 方向移动固定弧长 ``step``。
+
+    Returns
+    -------
+    path : (n, N, 3) ndarray
+        ``path[0]`` 为过渡态, 其余为 IRC 点 (Bohr)。
+    info : dict
+        ``energies`` / ``grad_norm`` (逐步梯度范数) / ``monotonic``。
+    """
+    from autoquantum.core.periodic import AMU_TO_ME, mass
+    from autoquantum.pes.optimize import numerical_hessian
+
+    c = np.asarray(coords_ts, dtype=float)
+    m = np.array([mass(s, extra_masses) for s in symbols]) * AMU_TO_ME
+    sq = np.sqrt(np.repeat(m, 3))
+    H = numerical_hessian(calc, c, h=h_hess)
+    Hmw = H / np.outer(sq, sq)
+    w, V = np.linalg.eigh(Hmw)
+    v_imag = V[:, 0]                     # 最低本征值 (应为负) 的本征矢
+    # 质量加权坐标 q_i = sqrt(m_i) x_i ⇒ 笛卡尔位移 dx = dq / sqrt(m)
+    # ⚠ 写成 * sq 会让 IRC 沿错误方向飞出 (实测能量反升, 真实踩过的 bug)
+    dx0 = (v_imag / sq).reshape(c.shape)
+    dx0 /= np.linalg.norm(dx0)
+    x = c + direction * step * dx0
+
+    path = [c, x.copy()]
+    energies = []
+    e0, g0 = calc.energy_and_gradient(c)
+    energies.append(float(e0))
+    gnorms = [float(np.abs(g0).max())]
+    _, g = calc.energy_and_gradient(x)
+    g_prev = g.ravel() / sq                       # 上一步的质量加权梯度
+    for _ in range(max_steps):
+        gmw = g.ravel() / sq
+        # Ishida–Morokuma 平均梯度: 抑制定步长 SD 路径在谷壁间的之字形振荡
+        d = 0.5 * (gmw + g_prev)
+        dn = float(np.linalg.norm(d))
+        if dn < 1e-12:
+            break
+        dq = -step * d / dn                       # 质量加权坐标中走固定弧长
+        dx = (dq / sq).reshape(c.shape)           # 换回笛卡尔 (除以 √m)
+        x = x + dx
+        e, g = calc.energy_and_gradient(x)
+        g_prev = gmw
+        path.append(x.copy())
+        energies.append(float(e))
+        gnorms.append(float(np.abs(g).max()))
+        if float(np.abs(g).max()) < 1e-4:
+            break
+
+    E = np.array(energies)
+    info = {"energies": E, "grad_norm": np.array(gnorms),
+            "monotonic": bool(np.all(np.diff(E) <= 1e-6)),
+            "n_points": len(path)}
+    return np.array(path), info

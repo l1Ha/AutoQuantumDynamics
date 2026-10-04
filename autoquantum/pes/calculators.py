@@ -234,7 +234,8 @@ class PySCFCalculator(Calculator):
                  cap_params: Optional[Dict[str, Any]] = None,
                  unit: str = "Bohr", conv_tol: float = 1e-9,
                  max_cycle: int = 100, frozen_core: bool = False,
-                 grad_t_mode: str = "fd", grad_t_h: float = 1e-4):
+                 grad_t_mode: str = "fd", grad_t_h: float = 1e-4,
+                 relativistic: Optional[str] = None):
         self.symbols = list(symbols)
         self.basis = basis
         self.charge = charge
@@ -255,6 +256,8 @@ class PySCFCalculator(Calculator):
         # (快但力与 CCSD(T) 能量不一致, 仅在明确接受该近似时使用)。
         self.grad_t_mode = str(grad_t_mode)
         self.grad_t_h = float(grad_t_h)
+        # 标量相对论: None (非相对论) | "x2c" (X2C 哈密顿量, 1e 积分修正)
+        self.relativistic = relativistic
 
         if self.method not in self._SCF_ONLY and self.method not in self._CORRELATED:
             raise ValueError(
@@ -323,6 +326,14 @@ class PySCFCalculator(Calculator):
 
         mf.conv_tol = self.conv_tol
         mf.max_cycle = self.max_cycle
+        if self.relativistic == "x2c":
+            # X2C 标量相对论单电子哈密顿量 (PySCF: mf.x2c())
+            mf = mf.x2c()
+            mf.conv_tol = self.conv_tol
+            mf.max_cycle = self.max_cycle
+        elif self.relativistic is not None:
+            raise ValueError(
+                f"未知 relativistic: {self.relativistic!r}; 支持 None 或 'x2c'")
         return mf
 
     def _corr_solver(self, mf):
@@ -561,6 +572,7 @@ class PySCFCalculator(Calculator):
             "spin_lock": str(self.spin_lock),
             "use_mom": str(self.use_mom),
             "frozen_core": str(self.frozen_core),
+            "relativistic": str(self.relativistic or "none"),
             "grad_t_mode": (self.grad_t_mode
                             if self.method in ("ccsd(t)", "ccsd_t") else "n/a"),
         }
