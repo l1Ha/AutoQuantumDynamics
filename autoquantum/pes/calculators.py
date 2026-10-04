@@ -207,7 +207,7 @@ class PySCFCalculator(Calculator):
 
     支持能力:
     - **SCF 层**: RHF, ROHF, UHF, DFT (RKS/ROKS/UKS)
-    - **多参考** (v0.25.0): CASSCF (含解析梯度) — 键断裂/强关联
+    - **多参考** (v0.25.0–v0.26.0): CASSCF + **NEVPT2 动态相关** — 键断裂/强关联
     - **相关方法** (v0.21.0): MP2, CCSD, CCSD(T) — 带解析核梯度
       (MP2: `grad.mp2`; CCSD/(T): `grad.ccsd`, 需在梯度前调用 `ccsd_t()`)
     - **高自旋约束与自旋锁定 (spin_lock)**: 开壳层自旋纯度审计, 防止态跃迁与自旋污染
@@ -237,7 +237,8 @@ class PySCFCalculator(Calculator):
                  max_cycle: int = 100, frozen_core: bool = False,
                  grad_t_mode: str = "fd", grad_t_h: float = 1e-4,
                  relativistic: Optional[str] = None,
-                 active_space: Optional[Tuple[int, int]] = None):
+                 active_space: Optional[Tuple[int, int]] = None,
+                 pt2: Optional[str] = None):
         self.symbols = list(symbols)
         self.basis = basis
         self.charge = charge
@@ -262,8 +263,16 @@ class PySCFCalculator(Calculator):
         self.relativistic = relativistic
         # CASSCF 活性空间 (ncas, nelecas); method="casscf" 时必填
         self.active_space = active_space
+        # 动态相关 (CASSCF 之上的微扰): None | "nevpt2"
+        # 注: PySCF 无 CASPT2 模块; NEVPT2 是同一层级 (CAS 参考 + 二阶微扰)
+        # 且**无侵入态问题** (intruder-state free), 是更稳健的替代。
+        self.pt2 = pt2.lower() if pt2 else None
+        if self.pt2 not in (None, "nevpt2"):
+            raise ValueError(f"未知 pt2: {pt2!r}; 支持 None 或 'nevpt2'")
+        if self.pt2 and self.method != "casscf":
+            raise ValueError('pt2="nevpt2" 需要 method="casscf"')
         if method.lower() == "casscf" and grad_t_mode != "casci":
-            # CASSCF 默认走有限差分梯度 (PySCF 无解析 CASSCF 梯度)
+            # CASSCF/NEVPT2 默认走有限差分梯度 (PySCF 无解析梯度模块)
             self.grad_t_mode = "fd"
 
         if self.method not in self._SCF_ONLY and self.method not in self._CORRELATED:
@@ -433,6 +442,10 @@ class PySCFCalculator(Calculator):
             e = float(mc.kernel()[0])
             if not mc.converged:
                 raise CommandBackendError("CASSCF 未收敛")
+            if self.pt2 == "nevpt2":
+                from pyscf import mrpt
+                e_pt2 = float(mrpt.NEVPT(mc).kernel())
+                e = e + e_pt2          # 动态相关修正 (二阶微扰)
             self._last_solver = mc
             if not need_grad:
                 return e, None
@@ -623,6 +636,7 @@ class PySCFCalculator(Calculator):
             "relativistic": str(self.relativistic or "none"),
             "active_space": (f"({self.active_space[0]},{self.active_space[1]})"
                              if self.active_space else "n/a"),
+            "pt2": str(self.pt2 or "none"),
             "grad_t_mode": (self.grad_t_mode
                             if self.method in ("ccsd(t)", "ccsd_t") else "n/a"),
         }

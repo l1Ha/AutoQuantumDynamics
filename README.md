@@ -70,6 +70,27 @@ python scripts/calc_metastable_heli.py --replot book/data/he_li_metastable_pes.n
 He\*+Li 共振（Γ≈10 meV，出射电子 14.4 eV）在现有基组/活性空间下不可分辨——
 定量 Γ 需专用连续谱基组或 Feshbach 投影。
 
+## NEVPT2 动态相关 (v0.26.0)
+
+```python
+calc = PySCFCalculator(["H","H"], basis="cc-pvdz", method="casscf",
+                       active_space=(8, 2), pt2="nevpt2")   # (ncas, nelecas)
+E, g = calc.energy_and_gradient(coords)     # 梯度默认有限差分
+```
+
+在 CASSCF 之上叠加二阶微扰动态相关，使**键能与势垒定量化**。
+⚠ PySCF **无 CASPT2 模块**；NEVPT2 属同一层级且**无侵入态问题**，是更稳健替代。
+
+| 体系 | 活性空间 | CASSCF−FCI | NEVPT2−FCI | 改善 |
+|---|---|---|---|---|
+| H₂, R=1.4 | (2,2) | 16.49 mHa | **5.81 mHa** | 2.8× |
+| **H₂, R=1.4** | **(8,2)** | 0.36 mHa | **0.10 mHa** | 3.5× |
+| LiH, R=3.0 | (2,2) | 14.64 mHa | **5.79 mHa** | 2.5× |
+| LiH, R=4.5 | (2,2) | 8.52 mHa | **3.16 mHa** | 2.7× |
+
+NEVPT2 优化键长 0.7645 Å < CASSCF 0.7704 Å（动态相关使键缩短，物理正确）；
+CASSCF FD 梯度与解析梯度两条优化路径给出**同一 R（差 0.005%）**，交叉验证通过。
+
 ## IRC 与 X2C 标量相对论 (v0.24.0)
 
 ```python

@@ -144,10 +144,14 @@ if __name__ == "__main__":
     print(f"节点: {os.uname().nodename}", flush=True)
     import pyscf
     print(f"pyscf: {pyscf.__version__}", flush=True)
+    only = [a.strip().upper() for a in sys.argv[1:] if a.strip()]
     t0 = time.time()
+    pool = [(nm, fn) for nm, fn in
+            (("A", test_A_dissociation), ("C", test_C_gradient),
+             ("D", test_D_lih), ("E", test_E_natural_occ))
+            if not only or nm in only]
     all_ok = True
-    for fn in (test_A_dissociation, test_C_gradient, test_D_lih,
-               test_E_natural_occ):
+    for _, fn in pool:
         try:
             res = fn()
             all_ok &= (res[0] if isinstance(res, tuple) else res)

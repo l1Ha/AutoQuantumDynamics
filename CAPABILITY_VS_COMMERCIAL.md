@@ -29,7 +29,8 @@
 | **CCSD + 解析梯度** | ✓ | ✓ | ✓ **(新)** | 梯度 vs FD: 3.54e-07 |
 | **CCSD(T) + 梯度** | ✓ | ✓ | ✓ **(新)** | 能量经 FCI 交叉验证; 梯度含 (T) 项 FD 修正, vs FD: 3.54e-07 |
 | CCSD(T)-F12 / 显式相关 | ✓✓ | ✗ | ✗ | F12 是 Molpro 招牌; 需专门积分库 |
-| MRCI / CASPT2 / RASPT2 | ✓✓ | ✗ | ✗ | CASSCF 已支持; 动态相关微扰 (CASPT2) 与 MRCI 未实现 |
+| **CASPT2 / NEVPT2 (动态相关)** | ✓ | ✗ | ✓ **(新, NEVPT2)** | `pt2="nevpt2"`: CAS 参考 + 二阶微扰, **无侵入态**; H₂/CAS(8,2) 距 FCI 仅 **0.10 mHa** (CASSCF 0.36); LiH 改善 2.5-2.7×。⚠ PySCF 无 CASPT2 模块 (NEVPT2 为同层级稳健替代) |
+| MRCI / RASPT2 | ✓✓ | ✗ | ✗ | 变分式多参考 CI 未实现 |
 | **CASSCF / 多组态 SCF** | ✓ | ✓ | ✓ **(新)** | `method="casscf"` + `active_space=(ncas,nelecas)`; H₂ 解离区 CASSCF 误差 **0.9 mHa** vs RHF **105.6 mHa** (R=4 Bohr, 对 FCI); LiH 亦验证。⚠ 梯度默认**有限差分** (PySCF 无 CASSCF 解析梯度模块) |
 | 激发态 (EOM-CCSD / TD-DFT) | ✓ | ✓ | ✗ | PySCF 有 `tdscf`/`eom`, 未接入 |
 | **几何优化 (极小点)** | ✓ | ✓ | ✓ **(新)** | BFGS + 解析梯度; H2O/N2/H2/CH4 验证 (真极小判据 + 文献) |
@@ -57,6 +58,7 @@
 | v0.23.0 | **CI-NEB 过渡态搜索** | LEPS 势垒 2.9961 eV = 解析 2.9961 (**0.00%**)；H₃ 势垒 10.24 kcal/mol；**TS 恰 1 虚频 −1465 cm⁻¹** |
 | v0.24.0 | **IRC 反应路径 / X2C 标量相对论** | IRC 双方向**完全一致**且 100% 单调；X2C vs 精确 Dirac: H 0.4%、He⁺ 1.0% |
 | v0.25.0 | **CASSCF 多参考** | H₂ 解离 R=4 Bohr: \|RHF−FCI\| 105.6 mHa → \|CASSCF−FCI\| **0.9 mHa** |
+| v0.26.0 | **NEVPT2 动态相关** | H₂/CAS(8,2) 距 FCI **0.10 mHa**; LiH 改善 2.5-2.7×; NEVPT2 R_e = 0.7645 Å < CASSCF 0.7704 Å (相关使键缩短); CASSCF FD 梯度交叉验证通过 (两路径同 R,**差 0.005%**) |
 
 累计修复的真实 bug (均被验证抓出, 非事后补记):
 重复 `_run` 覆盖 · `frozen` API 误用 · `energy()` 误触发梯度 · NEB 切向负索引回绕 ·
@@ -166,6 +168,6 @@ E. 自然轨道占据数             R=4.0 Bohr: 0.742/0.377 (显著部分占据
 3. ~~CASSCF 接入~~ — **v0.25.0 已完成** ✓ (能量验证; 梯度为有限差分, 因
    PySCF 无 CASSCF 解析梯度模块)。下一步: **CASPT2/NEVPT2 动态相关**。
 4. ~~标量相对论 (X2C)~~ — **v0.24.0 已完成** ✓ (相对论位移 vs 精确 Dirac 0.4-1.0%)。
-5. **CASPT2 / NEVPT2**: 在 CASSCF 之上补动态相关 (键能/势垒定量化的关键一步)。
+5. ~~CASPT2 / NEVPT2~~ — **v0.26.0 已完成 (NEVPT2)** ✓ (PySCF 无 CASPT2; NEVPT2 无侵入态)
 6. **激发态势能面 (TD-DFT / EOM-CCSD)**: 光化学 PES 的前置条件。
 7. **溶剂模型 (ddCOSMO/PCM)**: PySCF 提供 ddCOSMO, 接入成本低。
