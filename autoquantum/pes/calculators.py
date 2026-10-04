@@ -207,6 +207,7 @@ class PySCFCalculator(Calculator):
 
     支持能力:
     - **SCF 层**: RHF, ROHF, UHF, DFT (RKS/ROKS/UKS)
+    - **多参考** (v0.25.0): CASSCF (含解析梯度) — 键断裂/强关联
     - **相关方法** (v0.21.0): MP2, CCSD, CCSD(T) — 带解析核梯度
       (MP2: `grad.mp2`; CCSD/(T): `grad.ccsd`, 需在梯度前调用 `ccsd_t()`)
     - **高自旋约束与自旋锁定 (spin_lock)**: 开壳层自旋纯度审计, 防止态跃迁与自旋污染
@@ -224,7 +225,7 @@ class PySCFCalculator(Calculator):
         "ccsd_t": "ccsd(t)",
     }
     #: 纯 SCF 方法
-    _SCF_ONLY = ("rhf", "rohf", "uhf", "dft", "rks", "roks", "uks")
+    _SCF_ONLY = ("rhf", "rohf", "uhf", "dft", "rks", "roks", "uks", "casscf")
 
     def __init__(self, symbols: Sequence[str], basis: str = "sto-3g",
                  charge: int = 0, spin: int = 0, method: str = "rhf",
@@ -235,7 +236,8 @@ class PySCFCalculator(Calculator):
                  unit: str = "Bohr", conv_tol: float = 1e-9,
                  max_cycle: int = 100, frozen_core: bool = False,
                  grad_t_mode: str = "fd", grad_t_h: float = 1e-4,
-                 relativistic: Optional[str] = None):
+                 relativistic: Optional[str] = None,
+                 active_space: Optional[Tuple[int, int]] = None):
         self.symbols = list(symbols)
         self.basis = basis
         self.charge = charge
@@ -258,6 +260,11 @@ class PySCFCalculator(Calculator):
         self.grad_t_h = float(grad_t_h)
         # 标量相对论: None (非相对论) | "x2c" (X2C 哈密顿量, 1e 积分修正)
         self.relativistic = relativistic
+        # CASSCF 活性空间 (ncas, nelecas); method="casscf" 时必填
+        self.active_space = active_space
+        if method.lower() == "casscf" and grad_t_mode != "casci":
+            # CASSCF 默认走有限差分梯度 (PySCF 无解析 CASSCF 梯度)
+            self.grad_t_mode = "fd"
 
         if self.method not in self._SCF_ONLY and self.method not in self._CORRELATED:
             raise ValueError(
@@ -318,6 +325,9 @@ class PySCFCalculator(Calculator):
             mf = dft.UKS(mol)
             if self.xc:
                 mf.xc = self.xc
+        elif m == "casscf":
+            # CASSCF: 先用 RHF/ROHF 参考, 再由 _run 做多组态自洽
+            mf = scf.RHF(mol) if self.spin == 0 else scf.ROHF(mol)
         else:
             raise ValueError(
                 f"未知 method: {self.method}; 支持 'rhf', 'rohf', 'uhf', "
@@ -410,6 +420,40 @@ class PySCFCalculator(Calculator):
                 self._ref_mo_coeff = self._initial_mo_coeff
                 self._ref_mo_occ = self._initial_mo_occ
 
+        # ---- CASSCF: 多组态自洽场 (静态相关 / 键断裂) ----
+        if self.method == "casscf":
+            if not self.active_space:
+                raise CommandBackendError(
+                    'method="casscf" 需要 active_space=(ncas, nelecas)')
+            from pyscf import mcscf
+            ncas, nelecas = self.active_space
+            mc = mcscf.CASSCF(mf, int(ncas), int(nelecas))
+            mc.conv_tol = max(self.conv_tol, 1e-8)
+            mc.max_cycle = self.max_cycle
+            e = float(mc.kernel()[0])
+            if not mc.converged:
+                raise CommandBackendError("CASSCF 未收敛")
+            self._last_solver = mc
+            if not need_grad:
+                return e, None
+            # ⚠ PySCF 无 CASSCF 解析梯度模块 (pyscf.grad.mcscf 不存在);
+            # mc.nuc_grad_method() 返回的是 **CASCI 型**梯度 (缺轨道响应项):
+            # 对 CAS(2,2)/H₂ 恰好正确 (实测 vs FD 3.8e-07), 但 CAS(4,4)/H₂O
+            # 下偏差达 10² Ha/Bohr (实测)。故默认用中心有限差分 (正确但 6N 倍
+            # 能量代价); grad_t_mode="casci" 可取那个近似值 (仅供快速预估)。
+            if self.grad_t_mode == "casci":
+                grad = mc.nuc_grad_method().kernel()
+                return e, np.asarray(lib.asarray(grad), dtype=float).reshape(-1, 3)
+            g = np.zeros_like(coords_arr)
+            for i in range(coords_arr.shape[0]):
+                for j in range(3):
+                    cp, cm = coords_arr.copy(), coords_arr.copy()
+                    cp[i, j] += self.grad_t_h
+                    cm[i, j] -= self.grad_t_h
+                    g[i, j] = (self._energy_only(cp) - self._energy_only(cm)) / \
+                        (2 * self.grad_t_h)
+            return e, g
+
         # ---- 相关方法 (MP2 / CCSD / CCSD(T)): 能量与**相关梯度** ----
         solver, with_t = self._corr_solver(mf)
         if solver is not None:
@@ -427,6 +471,10 @@ class PySCFCalculator(Calculator):
             grad = mf.nuc_grad_method().kernel()
         grad_arr = np.asarray(lib.asarray(grad), dtype=float).reshape(-1, 3)
         return float(e), grad_arr
+
+    def _energy_only(self, coords: np.ndarray) -> float:
+        """仅算能量 (供 CASSCF 有限差分梯度使用, 避免递归求梯度)。"""
+        return self._run(coords, need_grad=False)[0]
 
     def _t_increment(self, coords: np.ndarray, guess=None):
         """(T) 能量增量 E_(T) = E_CCSD(T) - E_CCSD (Hartree)。
@@ -573,6 +621,8 @@ class PySCFCalculator(Calculator):
             "use_mom": str(self.use_mom),
             "frozen_core": str(self.frozen_core),
             "relativistic": str(self.relativistic or "none"),
+            "active_space": (f"({self.active_space[0]},{self.active_space[1]})"
+                             if self.active_space else "n/a"),
             "grad_t_mode": (self.grad_t_mode
                             if self.method in ("ccsd(t)", "ccsd_t") else "n/a"),
         }

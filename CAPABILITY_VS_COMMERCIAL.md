@@ -29,8 +29,8 @@
 | **CCSD + 解析梯度** | ✓ | ✓ | ✓ **(新)** | 梯度 vs FD: 3.54e-07 |
 | **CCSD(T) + 梯度** | ✓ | ✓ | ✓ **(新)** | 能量经 FCI 交叉验证; 梯度含 (T) 项 FD 修正, vs FD: 3.54e-07 |
 | CCSD(T)-F12 / 显式相关 | ✓✓ | ✗ | ✗ | F12 是 Molpro 招牌; 需专门积分库 |
-| MRCI / CASPT2 / RASPT2 | ✓✓ | ✗ | ✗ | 强关联/键断裂/激发态必需 |
-| CASSCF / 多组态 SCF | ✓ | ✓ | ✗ | PySCF 有 `mcscf`, 未接入本后端 |
+| MRCI / CASPT2 / RASPT2 | ✓✓ | ✗ | ✗ | CASSCF 已支持; 动态相关微扰 (CASPT2) 与 MRCI 未实现 |
+| **CASSCF / 多组态 SCF** | ✓ | ✓ | ✓ **(新)** | `method="casscf"` + `active_space=(ncas,nelecas)`; H₂ 解离区 CASSCF 误差 **0.9 mHa** vs RHF **105.6 mHa** (R=4 Bohr, 对 FCI); LiH 亦验证。⚠ 梯度默认**有限差分** (PySCF 无 CASSCF 解析梯度模块) |
 | 激发态 (EOM-CCSD / TD-DFT) | ✓ | ✓ | ✗ | PySCF 有 `tdscf`/`eom`, 未接入 |
 | **几何优化 (极小点)** | ✓ | ✓ | ✓ **(新)** | BFGS + 解析梯度; H2O/N2/H2/CH4 验证 (真极小判据 + 文献) |
 | **谐振频率 / Hessian** | ✓ | ✓ | ✓ **(新)** | 数值 Hessian + 质量加权 + 平动转动投影; H2O 与实验谐振频率差 1.86%, 0 虚频 |
@@ -94,6 +94,15 @@ C. IRC 顶点                   首步 Δ = −2426 µHa (必须下降)         
 D. **X2C vs 精确 Dirac**      H(Z=1) −6.633 vs −6.657 µHa (0.4%);
                               He⁺(Z=2) −107.535 vs −106.514 µHa (1.0%)     ✓
    X2C 梯度 vs FD             H2O/cc-pVDZ: 7.9e-07 Ha/Bohr                ✓
+
+CASSCF 多参考验证 (scripts/validate_casscf.py, Slurm 1558715 + 1558721):
+A. H₂/cc-pVDZ 解离曲线        R=4.0 Bohr: |RHF−FCI| = **105.6 mHa** →
+                              |CASSCF(2,2)−FCI| = **0.9 mHa** (R=5.0 时 0.14) ✓
+D. LiH/cc-pVDZ CAS(2,2)       RHF−FCI 31.1/34.1 mHa → CASSCF−FCI 14.6/8.5 mHa ✓
+E. 自然轨道占据数             R=4.0 Bohr: 0.742/0.377 (显著部分占据 = 多参考特征) ✓
+   梯度诊断                   PySCF 无 `grad.mcscf`; CASCI 型梯度对 CAS(2,2)/H₂
+                              精确 (vs FD 3.8e-07) 但对 CAS(4,4)/H₂O 失效
+                              (123 Ha/Bohr) → 本后端 CASSCF 默认**有限差分**梯度
 ```
 
 关键实现细节 (踩过的坑, 已修复并记录):
@@ -139,6 +148,6 @@ D. **X2C vs 精确 Dirac**      H(Z=1) −6.633 vs −6.657 µHa (0.4%);
 
 1. ~~几何优化 / 内坐标扫描 / 频率 / ECP~~ — **v0.22.0 已完成并验证** ✓
 2. ~~过渡态搜索 / IRC / 标量相对论~~ — **v0.23.0–v0.24.0 已完成并验证** ✓
-3. **CASSCF 接入** (PySCF `mcscf` 已在环境中): 覆盖键断裂型反应 (如 H + H₂ 的
-   交换反应) 的多参考描述。
+3. ~~CASSCF 接入~~ — **v0.25.0 已完成** ✓ (能量验证; 梯度为有限差分, 因
+   PySCF 无 CASSCF 解析梯度模块)。下一步: **CASPT2/NEVPT2 动态相关**。
 4. **标量相对论 (X2C/ZORA)**: 与已支持的 ECP 配套, 覆盖重元素定量精度。

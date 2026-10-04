@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.25.0 — CASSCF 多参考 (键断裂/强关联 PES)
+
+### Added
+
+- **CASSCF** (`PySCFCalculator(method="casscf", active_space=(ncas, nelecas))`):
+  RHF/ROHF 参考 + 多组态自洽场 (轨道与 CI 同时优化), 覆盖单参考方法失效的
+  键断裂与强关联区。
+- **CASSCF 梯度**: 默认**中心有限差分** (正确性优先)。原因: **PySCF 没有
+  CASSCF 解析梯度模块** (`pyscf.grad.mcscf` 不存在); `mc.nuc_grad_method()`
+  返回的是 **CASCI 型**梯度 (缺轨道响应), 实测对 CAS(2,2)/H₂ 恰好精确
+  (vs FD 3.8e-07) 但对 CAS(4,4)/H₂O **偏差 123 Ha/Bohr**。
+  `grad_t_mode="casci"` 可取该近似 (仅建议快速预估)。
+
+### Verified (服务器 Slurm 1558715 + 1558721, 日志已归档)
+
+| 检验 | 结果 |
+|---|---|
+| H₂/cc-pVDZ 解离曲线 | R=4.0 Bohr：**\|RHF−FCI\| = 105.6 mHa → \|CASSCF(2,2)−FCI\| = 0.9 mHa**（R=5.0 时 0.14 mHa）；RHF 在拉伸区严重高估而 CASSCF 恢复正确的解离行为 ✓ |
+| LiH/cc-pVDZ CAS(2,2) | RHF−FCI = 31.1/34.1 mHa → CASSCF−FCI = 14.6/8.5 mHa ✓ |
+| 自然轨道占据数 | R=4.0 Bohr 前两位占据 = 0.742/0.377（显著部分占据 = 多参考特征）✓ |
+| 梯度机制诊断 | CAS(2,2)/H₂ 的 CASCI 型梯度 vs FD = 3.8e-07；CAS(4,4)/H₂O 失效（123 Ha/Bohr）→ 默认改 FD ✓ |
+
+注: 计划中的完整重跑（含 FD 梯度优化交叉验证）因集群被其他作业占满
+（xc002 176/192 CPU，`import pyscf` 需 97.7 s）而中止；上表结果来自
+已完成并归档的运行。
+
 ## 0.24.0 — IRC 内禀反应坐标与 X2C 标量相对论
 
 ### Added
