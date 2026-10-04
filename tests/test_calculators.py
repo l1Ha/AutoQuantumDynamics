@@ -325,3 +325,67 @@ class TestPySCFCalculatorMock(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestCorrelatedMethodDispatch(unittest.TestCase):
+    """相关方法 (MP2/CCSD/CCSD(T)) 的分发与梯度级别 (Mock 隔离)。"""
+
+    def test_unknown_method_rejected(self):
+        import sys
+        from unittest.mock import MagicMock, patch
+        import numpy as np
+        mods, mock_pyscf = TestPySCFCalculatorMock()._get_mock_modules()
+        with patch.dict(sys.modules, mods):
+            with self.assertRaises(ValueError):
+                make_calculator("pyscf", symbols=["H", "H"], method="mp3")
+
+    def test_correlated_dispatch_and_grad_level(self):
+        import sys
+        from unittest.mock import MagicMock, patch
+        mods, mock_pyscf = TestPySCFCalculatorMock()._get_mock_modules()
+        mock_pyscf.gto.Mole.return_value = MagicMock()
+        mock_mf = MagicMock(); mock_mf.converged = True
+        mock_mf.e_tot = -1.128
+        mock_mf.kernel.return_value = -1.128
+        mock_pyscf.scf.RHF.return_value = mock_mf
+        # CCSD 求解器
+        mock_cc = MagicMock()
+        mock_cc.kernel.return_value = (-0.035, None, None)
+        mock_cc.ccsd_t.return_value = -0.0001
+        mock_grad = MagicMock(); mock_grad.kernel.return_value = np.zeros((2, 3))
+        mock_cc.nuc_grad_method.return_value = mock_grad
+        mock_pyscf.cc.CCSD.return_value = mock_cc
+
+        with patch.dict(sys.modules, mods):
+            calc = make_calculator("pyscf", symbols=["H", "H"], method="ccsd(t)")
+            coords = np.array([[0., 0., 0.], [0., 0., 1.4]])
+            e, g = calc.energy_and_gradient(coords)
+            # 能量 = SCF + E_corr + (T)
+            self.assertAlmostEqual(e, -1.128 - 0.035 - 0.0001, places=6)
+            self.assertEqual(g.shape, (2, 3))
+            # provenance 记录梯度级别
+            self.assertEqual(calc.provenance["grad_t_mode"], "fd")
+            self.assertEqual(calc.provenance["method"], "ccsd(t)")
+
+    def test_energy_does_not_compute_gradient(self):
+        """energy() 不应触发梯度 (CCSD(T) 的 (T) 梯度是 6N 次 CCSD(T))。"""
+        import sys
+        from unittest.mock import MagicMock, patch
+        mods, mock_pyscf = TestPySCFCalculatorMock()._get_mock_modules()
+        mock_pyscf.gto.Mole.return_value = MagicMock()
+        mock_mf = MagicMock(); mock_mf.converged = True
+        mock_mf.e_tot = -1.128; mock_mf.kernel.return_value = -1.128
+        mock_pyscf.scf.RHF.return_value = mock_mf
+        mock_cc = MagicMock()
+        mock_cc.kernel.return_value = (-0.035, None, None)
+        mock_cc.ccsd_t.return_value = -0.0001
+        mock_pyscf.cc.CCSD.return_value = mock_cc
+
+        with patch.dict(sys.modules, mods):
+            calc = make_calculator("pyscf", symbols=["H", "H"], method="ccsd(t)")
+            coords = np.array([[0., 0., 0.], [0., 0., 1.4]])
+            e = calc.energy(coords)
+            mock_cc.nuc_grad_method.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()

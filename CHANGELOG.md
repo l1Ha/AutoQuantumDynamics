@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.21.0 — 相关方法后端 (MP2/CCSD/CCSD(T)) 与商用软件能力矩阵
+
+### Added
+
+- **相关波函数方法** (`pes/calculators.py`): `method` 支持 `mp2` / `ccsd` /
+  `ccsd(t)`, 返回总能量与**相关核梯度** (MP2 → `grad.mp2`; CCSD/(T) → `grad.ccsd`);
+  `frozen_core=True` 使用化学冻结核 (`pyscf.data.elements.chemcore`)。
+- **CCSD(T) 的 (T) 项梯度修正** (`grad_t_mode="fd"`): PySCF 的 `grad.ccsd`
+  **不含 (T) 项** (源码无 `ccsd_t` 路径), 直接用会造成"能量 CCSD(T)、力只有 CCSD"
+  的不一致。默认以 (T) 增量的中心有限差分补足 (成本 6N 次 CCSD(T)),
+  验证: 解析梯度 vs FD = 3.5e-07 Ha/Bohr (修复前 1.6e-03)。
+- **`energy()` 与梯度解耦** (`_run(..., need_grad=False)`): 避免纯能量调用触发
+  6N 次 CCSD(T) 的 (T) 梯度 (实测慢 13 倍以上, 作业因此卡住)。
+- **`CAPABILITY_VS_COMMERCIAL.md`**: 与 Molpro/Gaussian 的完整能力矩阵
+  (含 ✓/✗ 证据与"可替代"的可度量判据)。
+- **`scripts/validate_correlated_methods.py`** + `scripts/sbatch_corr_validate.sbatch`:
+  服务器 (Slurm) 验证套件 — RHF vs 文献、**CCSD ≡ FCI**(H2 严格 0.0000 mHa;
+  LiH 0.011 mHa)、方法阶梯一致性、四方法梯度 FD 校验、H2 键长基组收敛阶梯、
+  冻结核开关。**6/6 全绿** (节点 xc002, 约 22 min)。
+- Mock 测试 +3 (共 17): 相关方法分发、(T) 梯度级别 provenance、`energy()` 不触发梯度。
+
+### Fixed
+
+- **重复的 `_run` 定义**: 类中存在两个 `_run` (后者覆盖前者), 导致相关分支从未
+  执行 — 由服务器验证抓出 (所有方法返回同一 SCF 能量)。
+- **`frozen` API 误用**: `mp.MP2`/`cc.CCSD` 的 `frozen` 是**构造参数**,
+  不是 `kernel()` 参数 (原实现抛 `TypeError`)。
+- 测试判据修正: 2 电子体系的 (T) 恒为零属物理正确 (非缺陷); H2 键长必须用
+  **基组收敛阶梯**而非实验值直接比对; 冻结核判据符号。
+
 ## 0.20.3 — 参考曲线误差归因与 Γ 模型化验证
 
 ### Findings (决定性诊断, 均可复现)

@@ -70,6 +70,37 @@ python scripts/calc_metastable_heli.py --replot book/data/he_li_metastable_pes.n
 He\*+Li 共振（Γ≈10 meV，出射电子 14.4 eV）在现有基组/活性空间下不可分辨——
 定量 Γ 需专用连续谱基组或 Feshbach 投影。
 
+## 相关方法后端: MP2 / CCSD / CCSD(T) (v0.21.0)
+
+`PySCFCalculator` 现已支持**相关波函数方法** (含核梯度), 面向 PES 生成的主力方法阶梯:
+
+```python
+from autoquantum.pes.calculators import PySCFCalculator
+calc = PySCFCalculator(["O", "H", "H"], basis="cc-pvtz", method="ccsd(t)")
+E, g = calc.energy_and_gradient(coords)   # 能量 + 核梯度 (Hartree/Bohr)
+calc = PySCFCalculator(["O", "H", "H"], basis="cc-pvtz", method="mp2",
+                       frozen_core=True)  # 冻结核
+```
+
+**服务器验证结果** (`scripts/validate_correlated_methods.py`, Slurm `liquid_high`):
+
+| 检验 | 结果 |
+|---|---|
+| RHF/cc-pVDZ vs 文献 | H2O +0.019 / N2 +0.117 / H2 −0.005 mHa ✓ |
+| **CCSD ≡ FCI** (实现硬检验) | H2 **0.0000 mHa**（2 电子严格相等）/ LiH 0.0108 mHa ✓ |
+| 方法阶梯 E_CCSD(T)<E_CCSD<E_MP2<E_SCF | 4/4 体系 ✓ |
+| 解析梯度 vs 有限差分 | rhf 4.1e-7 / mp2 3.0e-7 / ccsd 3.5e-7 / **ccsd(t) 3.5e-7** Ha/Bohr ✓ |
+| H2 键长基组收敛 | cc-pVDZ 0.7633 → cc-pVTZ 0.7452 → cc-pVQZ 0.7444 Å（实验 0.7414，差 0.41%）✓ |
+
+⚠ **重要实现说明**: PySCF 的 CCSD 解析梯度**不含 (T) 项**。本后端默认对 CCSD(T)
+施加 **(T) 项的有限差分修正**（`grad_t_mode="fd"`，成本 6N 次 CCSD(T)），确保
+"能量是 CCSD(T)、力也是 CCSD(T)"——否则力训练与几何优化会被系统性偏差污染。
+`energy()` 已与梯度计算解耦（否则 CCSD(T) 纯能量调用会慢 13 倍以上）。
+
+**与 Molpro/Gaussian 的能力对比与替代边界**: 见
+[CAPABILITY_VS_COMMERCIAL.md](CAPABILITY_VS_COMMERCIAL.md)（含完整的 ✓/✗ 矩阵与
+可度量判据）。
+
 ## 热速率常数 (v0.16.0)## 热速率常数 (v0.16.0)## 热速率常数 (v0.16.0)
 
 ```python

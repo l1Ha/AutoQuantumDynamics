@@ -206,13 +206,25 @@ class PySCFCalculator(Calculator):
     """PySCF 从头算与 DFT 计算后端 (可选依赖; 实验性)。
 
     支持能力:
-    - **闭壳层与开壳层**: RHF, ROHF, UHF, DFT (RKS/ROKS/UKS)
+    - **SCF 层**: RHF, ROHF, UHF, DFT (RKS/ROKS/UKS)
+    - **相关方法** (v0.21.0): MP2, CCSD, CCSD(T) — 带解析核梯度
+      (MP2: `grad.mp2`; CCSD/(T): `grad.ccsd`, 需在梯度前调用 `ccsd_t()`)
     - **高自旋约束与自旋锁定 (spin_lock)**: 开壳层自旋纯度审计, 防止态跃迁与自旋污染
     - **最大重叠法 (MOM)**: 沿几何路径保持特定电子轨道占据, 克服激发态与非平衡态变分塌陷
     - **共振态衰减宽度 (CAP-PES)**: 提供自电离衰变宽度 Γ(R) 与复能量 E_R - i*Γ/2 接口
     """
 
     name = "pyscf"
+
+    #: 相关方法 → (SCF 参考, 求解器类型)
+    _CORRELATED: Dict[str, str] = {
+        "mp2": "mp2",
+        "ccsd": "ccsd",
+        "ccsd(t)": "ccsd(t)",
+        "ccsd_t": "ccsd(t)",
+    }
+    #: 纯 SCF 方法
+    _SCF_ONLY = ("rhf", "rohf", "uhf", "dft", "rks", "roks", "uks")
 
     def __init__(self, symbols: Sequence[str], basis: str = "sto-3g",
                  charge: int = 0, spin: int = 0, method: str = "rhf",
@@ -221,7 +233,8 @@ class PySCFCalculator(Calculator):
                  mom_reference: str = "prev",
                  cap_params: Optional[Dict[str, Any]] = None,
                  unit: str = "Bohr", conv_tol: float = 1e-9,
-                 max_cycle: int = 100):
+                 max_cycle: int = 100, frozen_core: bool = False,
+                 grad_t_mode: str = "fd", grad_t_h: float = 1e-4):
         self.symbols = list(symbols)
         self.basis = basis
         self.charge = charge
@@ -236,6 +249,17 @@ class PySCFCalculator(Calculator):
         self.unit = unit
         self.conv_tol = float(conv_tol)
         self.max_cycle = int(max_cycle)
+        self.frozen_core = bool(frozen_core)
+        # CCSD(T) 的 (T) 项梯度: PySCF 的 grad.ccsd 不含 (T), 故默认用有限差分
+        # 补上 (T) 增量 (grad_t_mode="fd"), 保证能量与力一致; "ccsd" 则跳过
+        # (快但力与 CCSD(T) 能量不一致, 仅在明确接受该近似时使用)。
+        self.grad_t_mode = str(grad_t_mode)
+        self.grad_t_h = float(grad_t_h)
+
+        if self.method not in self._SCF_ONLY and self.method not in self._CORRELATED:
+            raise ValueError(
+                f"未知 method: {self.method}; 支持 {sorted(self._SCF_ONLY + tuple(self._CORRELATED))}"
+            )
 
         self._ref_mo_coeff = None
         self._ref_mo_occ = None
@@ -265,9 +289,15 @@ class PySCFCalculator(Calculator):
         return mol
 
     def _mf(self, mol):
+        """构造 SCF 参考 (相关方法按其自旋选择 RHF/UHF 参考)。"""
         from pyscf import scf, dft
         m = self.method
-        if m == "rhf":
+        ref = self._CORRELATED.get(m)
+        if ref is not None:
+            # 相关方法的参考波函数: 闭壳层 RHF, 开壳层 UHF
+            # (PySCF 的解析 CCSD 梯度支持 RHF/UHF 参考)
+            mf = scf.RHF(mol) if self.spin == 0 else scf.UHF(mol)
+        elif m == "rhf":
             mf = scf.RHF(mol)
         elif m == "rohf":
             mf = scf.ROHF(mol)
@@ -288,29 +318,38 @@ class PySCFCalculator(Calculator):
         else:
             raise ValueError(
                 f"未知 method: {self.method}; 支持 'rhf', 'rohf', 'uhf', "
-                f"'dft', 'rks', 'roks', 'uks'"
+                f"'dft', 'rks', 'roks', 'uks', 'mp2', 'ccsd', 'ccsd(t)'"
             )
 
         mf.conv_tol = self.conv_tol
         mf.max_cycle = self.max_cycle
         return mf
 
-    @staticmethod
-    def _mom_setocc(mo_occ: np.ndarray) -> np.ndarray:
-        """把 ``mf.mo_occ`` 转换为 PySCF ``mom_occ`` 所需的占据数组。
+    def _corr_solver(self, mf):
+        """构造相关方法求解器 (MP2 / CCSD), 返回 (solver, 是否含 (T))。
 
-        - UHF/UKS: ``mo_occ`` 已是 (2, nmo) 的 0/1 alpha/beta 数组, 直接使用;
-        - ROHF/ROKS: ``mo_occ`` 为一维 {2,1,0} (双占据/单占据/空), 需展开为
-          (2, nmo): alpha = [occ≥1], beta = [occ≥2] (PySCF MOM 的约定)。
+        注意: PySCF 的 ``frozen`` 是**构造参数**(``mp.MP2(mf, frozen=...)`` /
+        ``cc.CCSD(mf, frozen=...)``), 不是 ``kernel()`` 的参数。
         """
-        occ = np.asarray(mo_occ, dtype=float)
-        if occ.ndim == 2:
-            return (occ > 0).astype(float)
-        alpha = (occ >= 1.0).astype(float)
-        beta = (occ >= 2.0).astype(float)
-        return np.stack([alpha, beta])
+        from pyscf import cc, mp
+        ref = self._CORRELATED.get(self.method)
+        if ref is None:
+            return None, False
+        frozen = None
+        if self.frozen_core:
+            from pyscf.data import elements
+            frozen = elements.chemcore(mf.mol)
+        if ref == "mp2":
+            return mp.MP2(mf, frozen=frozen), False
+        mycc = cc.CCSD(mf, frozen=frozen)
+        return mycc, ref == "ccsd(t)"
 
-    def _run(self, coords: np.ndarray):
+    def _run(self, coords: np.ndarray, need_grad: bool = True):
+        """计算能量 (Hartree), 可选计算核梯度。
+
+        ``need_grad=False`` 时跳过梯度 (对 CCSD(T) 尤其重要: 其 (T) 项梯度
+        为 6N 次 CCSD(T) 的有限差分, 纯能量调用不应触发)。
+        """
         from pyscf import lib
         coords_arr = np.asarray(coords, dtype=float)
         mol = self._mol(coords_arr)
@@ -360,21 +399,97 @@ class PySCFCalculator(Calculator):
                 self._ref_mo_coeff = self._initial_mo_coeff
                 self._ref_mo_occ = self._initial_mo_occ
 
-        grad = mf.nuc_grad_method().kernel()
+        # ---- 相关方法 (MP2 / CCSD / CCSD(T)): 能量与**相关梯度** ----
+        solver, with_t = self._corr_solver(mf)
+        if solver is not None:
+            e = self._corr_energy(solver, with_t, mf)
+            if not need_grad:
+                return float(e), None
+            # PySCF: MP2 → grad.mp2; CCSD → grad.ccsd (**不含 (T) 项**)
+            grad = solver.nuc_grad_method().kernel()
+            if with_t and self.grad_t_mode == "fd":
+                grad = grad + self._fd_t_gradient(coords_arr)
+            self._last_solver = solver
+        else:
+            if not need_grad:
+                return float(e), None
+            grad = mf.nuc_grad_method().kernel()
         grad_arr = np.asarray(lib.asarray(grad), dtype=float).reshape(-1, 3)
         return float(e), grad_arr
 
+    def _t_increment(self, coords: np.ndarray) -> float:
+        """(T) 能量增量 E_(T) = E_CCSD(T) - E_CCSD (Hartree)。"""
+        from pyscf import lib as _lib
+        mol = self._mol(np.asarray(coords, dtype=float))
+        mf = self._mf(mol)
+        mf.conv_tol = self.conv_tol
+        mf.kernel()
+        solver, _ = self._corr_solver(mf)
+        e_ccsd = float(mf.e_tot) + float(solver.kernel()[0])
+        e_t = float(solver.ccsd_t())
+        del _lib
+        return e_t if abs(e_t) > 1e-14 else 0.0
+
+    def _fd_t_gradient(self, coords: np.ndarray, h: float | None = None) -> np.ndarray:
+        """(T) 项梯度的中心有限差分 (PySCF grad.ccsd 不含 (T), 必须补)。
+
+        成本: 每个构型 6N 次 CCSD(T) 计算。对力训练/几何优化是必需的
+        (否则能量是 CCSD(T) 而力只有 CCSD 水平, 二者不一致)。
+        """
+        h = self.grad_t_h if h is None else h
+        c0 = np.asarray(coords, dtype=float)
+        g = np.zeros_like(c0)
+        for i in range(c0.shape[0]):
+            for j in range(3):
+                cp, cm = c0.copy(), c0.copy()
+                cp[i, j] += h
+                cm[i, j] -= h
+                g[i, j] = (self._t_increment(cp) - self._t_increment(cm)) / (2 * h)
+        return g
+
+    def _corr_energy(self, solver, with_t: bool, mf) -> float:
+        """跑相关求解器并返回总能量 (Hartree); 收敛失败抛 CommandBackendError。
+
+        frozen 已在 ``_corr_solver`` 构造时设定; (T) 项用求解器自带设置。
+        """
+        e_corr = float(solver.kernel()[0])
+        e_tot = float(mf.e_tot) + e_corr
+        if with_t:
+            e_tot += float(solver.ccsd_t())
+        return e_tot
+
+    @staticmethod
+    def _mom_setocc(mo_occ: np.ndarray) -> np.ndarray:
+        """把 ``mf.mo_occ`` 转换为 PySCF ``mom_occ`` 所需的占据数组。
+
+        - UHF/UKS: ``mo_occ`` 已是 (2, nmo) 的 0/1 alpha/beta 数组, 直接使用;
+        - ROHF/ROKS: ``mo_occ`` 为一维 {2,1,0} (双占据/单占据/空), 需展开为
+          (2, nmo): alpha = [occ≥1], beta = [occ≥2] (PySCF MOM 的约定)。
+        """
+        occ = np.asarray(mo_occ, dtype=float)
+        if occ.ndim == 2:
+            return (occ > 0).astype(float)
+        alpha = (occ >= 1.0).astype(float)
+        beta = (occ >= 2.0).astype(float)
+        return np.stack([alpha, beta])
+
     def energy_and_gradient(self, coords: np.ndarray) -> Tuple[float, np.ndarray]:
-        """SCF 能量 (Hartree) 与梯度 (Hartree/Bohr); SCF 不收敛或自旋锁定失败时抛错。"""
+        """总能量 (Hartree) 与核梯度 (Hartree/Bohr)。
+
+        方法由 ``method`` 决定: SCF 层 (RHF/ROHF/UHF/RKS/ROKS/UKS) 或
+        相关方法 (MP2/CCSD/CCSD(T))。相关方法返回**相关梯度**
+        (MP2 走 ``grad.mp2``; CCSD/(T) 走 ``grad.ccsd``)。SCF 不收敛或
+        自旋锁定失败时抛 ``CommandBackendError``。
+        """
         return self._run(coords)
 
     def energy(self, coords: np.ndarray) -> float:
-        """SCF 能量 (Hartree)。"""
-        return self._run(coords)[0]
+        """总能量 (Hartree); SCF 或相关方法由 ``method`` 决定 (不计算梯度)。"""
+        return self._run(coords, need_grad=False)[0]
 
     def gradient(self, coords: np.ndarray) -> np.ndarray:
-        """SCF 核梯度 (Hartree/Bohr)。"""
-        return self._run(coords)[1]
+        """核梯度 (Hartree/Bohr); 相关方法返回相关梯度。"""
+        return self._run(coords, need_grad=True)[1]
 
     def resonance_width(self, coords: np.ndarray) -> float:
         """**解析模型接口** (非从头算) — 给出自电离宽度 Γ(R) 的经验估计 (Hartree)。
@@ -436,6 +551,9 @@ class PySCFCalculator(Calculator):
             "spin": str(self.spin),
             "spin_lock": str(self.spin_lock),
             "use_mom": str(self.use_mom),
+            "frozen_core": str(self.frozen_core),
+            "grad_t_mode": (self.grad_t_mode
+                            if self.method in ("ccsd(t)", "ccsd_t") else "n/a"),
         }
         if self.xc:
             p["xc"] = str(self.xc)
