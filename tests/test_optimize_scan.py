@@ -14,6 +14,7 @@ from autoquantum.pes.calculators import AnalyticCalculator
 from autoquantum.pes.optimize import (optimize_geometry, harmonic_frequencies,
                                       numerical_hessian)
 from autoquantum.pes import scan as Scan
+from autoquantum.pes.neb import neb_path, _tangents
 from autoquantum.core.periodic import mass, AMU_TO_ME
 
 BOHR = 0.529177210903
@@ -143,6 +144,18 @@ class TestFrequencies(unittest.TestCase):
         self.assertAlmostEqual(f_d[0] / f_h[0], np.sqrt(mu_h / mu_d),
                                places=6)
 
+    def test_saddle_reports_one_imaginary_mode(self):
+        """鞍点必须报 1 个虚频 (取最大特征值的旧实现会漏掉负特征值)。"""
+        calc = harmonic_calc(-0.4, 2.0)      # 负曲率 = 抛物线势垒
+        coords = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.0]])
+        freqs, info = harmonic_frequencies(calc, ["H", "H"], coords)
+        self.assertEqual(info["n_imag"], 1)
+        self.assertEqual(len(freqs), 1)
+        self.assertLess(freqs[0], 0.0)
+        mu = (mass("H") / 2) * AMU_TO_ME
+        self.assertAlmostEqual(freqs[0], -np.sqrt(0.4 / mu) * AU_FREQ_TO_CM,
+                               delta=1.0)
+
     def test_nonlinear_water_like_modes(self):
         """非线性三原子: 应有 3N-6 = 3 个振动模式。"""
         calc = morse_calc(0.1, 1.0, 2.0)
@@ -211,6 +224,71 @@ class TestScan(unittest.TestCase):
         for k, r in enumerate(grid):
             got = float(np.linalg.norm(data.geometry[k][0] - data.geometry[k][1]))
             self.assertAlmostEqual(got, r, places=9)
+
+
+class TestNEB(unittest.TestCase):
+    """CI-NEB: 解析面 (LEPS H+H₂) 上的势垒与鞍点几何。
+
+    本测试可直接捕获两类真实 bug:
+    - 切向的负索引回绕 (i=0 用 ext[i-1] 会取到终点) → 路径塌陷;
+    - 势垒参照错用第一个镜像而非反应物端点。
+    """
+
+    @staticmethod
+    def _leps_calc():
+        from autoquantum.pes.leps import LEPSBuilder
+        lb = LEPSBuilder()
+
+        def energy(c):
+            c = np.asarray(c, dtype=float)
+            return float(np.ravel(lb.evaluate_2d(
+                abs(c[0][0] - c[1][0]), abs(c[1][0] - c[2][0])))[0])
+
+        def grad(c):
+            c = np.asarray(c, dtype=float)
+            h = 1e-6
+            g = np.zeros_like(c)
+            for i in range(3):
+                for j in range(3):
+                    cp, cm = c.copy(), c.copy()
+                    cp[i, j] += h; cm[i, j] -= h
+                    g[i, j] = (energy(cp) - energy(cm)) / (2 * h)
+            return g
+
+        return AnalyticCalculator(energy, grad, name="leps")
+
+    def test_tangent_no_wraparound(self):
+        """首末镜像的切向必须由固定端点定义 (不能被负索引回绕污染)。"""
+        a = np.array([[0.0, 0.0, 0.0]])
+        b = np.array([[10.0, 0.0, 0.0]])
+        imgs = np.array([[[2.0, 0, 0]], [[5.0, 0, 0]], [[8.0, 0, 0]]])
+        tau = _tangents(imgs, a, b)
+        # 全部应指向 +x (路径单调)
+        for i in range(3):
+            self.assertGreater(tau[i][0, 0], 0.99)
+
+    def test_leps_barrier_and_saddle(self):
+        from autoquantum.pes.leps import LEPSBuilder
+        calc = self._leps_calc()
+        A = np.array([[0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [5.401, 0.0, 0.0]])
+        B = np.array([[0.0, 0.0, 0.0], [1.401, 0.0, 0.0], [5.401, 0.0, 0.0]])
+        lb = LEPSBuilder()
+        rr = np.linspace(1.2, 4.0, 800)
+        v = np.ravel(lb.evaluate_2d(rr, rr))
+        e_react = float(np.ravel(lb.evaluate_2d(4.0, 1.401))[0])
+        bar_ref = (v.min() - e_react) * 27.211386245988
+        imgs, info = neb_path(calc, ["H"] * 3, A, B, n_images=9,
+                              k_spring=0.08, max_iter=800, gtol=1e-2)
+        # 势垒: 解析鞍点参照, 容差 5%
+        self.assertAlmostEqual(info["barrier_eV"], bar_ref, delta=0.05 * bar_ref)
+        # 鞍点几何: 对称 (R1 ≈ R2) 且对应解析值
+        ts = imgs[info["ts_index"]]
+        r1 = abs(ts[0][0] - ts[1][0]); r2 = abs(ts[1][0] - ts[2][0])
+        self.assertLess(abs(r1 - r2) / max(r1, r2), 0.03)
+        r_ref = float(rr[int(np.argmin(v))])
+        self.assertAlmostEqual(0.5 * (r1 + r2), r_ref, delta=0.05)
+        # 对称反应: ΔE_rxn = 0
+        self.assertAlmostEqual(info["reaction_energy_eV"], 0.0, delta=1e-3)
 
 
 if __name__ == "__main__":

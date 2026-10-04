@@ -70,6 +70,32 @@ python scripts/calc_metastable_heli.py --replot book/data/he_li_metastable_pes.n
 He\*+Li 共振（Γ≈10 meV，出射电子 14.4 eV）在现有基组/活性空间下不可分辨——
 定量 Γ 需专用连续谱基组或 Feshbach 投影。
 
+## 过渡态搜索: CI-NEB (v0.23.0)
+
+```python
+from autoquantum.pes.neb import neb_path, imaginary_mode_count
+images, info = neb_path(calc, symbols, coords_reactant, coords_product,
+                        n_images=9, climb=True)      # → MEP + TS
+ts = images[info["ts_index"]]
+print(info["barrier_eV"], info["converged"])
+assert imaginary_mode_count(calc, symbols, ts) == 1   # 鞍点判据
+```
+
+**服务器验证**（Slurm 1558518 @ xc016, 2344 s, exit 0, 4/4）：
+
+| 检验 | 结果 |
+|---|---|
+| LEPS 解析面（H+H₂） | 势垒 **2.9961 eV = 解析值 2.9961（0.00%）**，TS 几何与解析鞍点一致 ✓ |
+| H₃ 交换（CCSD/cc-pVDZ） | 势垒 **10.241 kcal/mol**（CCSD(T)/CBS 9.60，小基组高估 6.7% 属预期）✓ |
+| **鞍点虚频（关键判据）** | TS **恰 1 虚频 = −1464.6 cm⁻¹**，全谱 −1465/240/908/2080 cm⁻¹；对照 H₂ 为 0 虚频、4382.6 cm⁻¹ ✓ |
+| TS 几何 | 线性（残差 1.8e-16）、对称（0.000%）、R_HH = 0.9422 Å vs 文献 0.93（1.31%）✓ |
+
+本轮修复两个**关键 bug**（均由严格验证抓出）：
+① NEB 切向的负索引回绕（`ext[i-1]` 在 i=0 取到终点 → 路径塌陷，势垒错到 44 eV）；
+② **谐振频率漏掉虚频**（取"最大 nvib 个本征值"，而虚频是**负**本征值会被丢弃 →
+过渡态被误报 0 虚频，这会让所有 TS 验证静默失效）。已改为在平动/转动正交补
+空间内对角化，并补了鞍点回归测试。
+
 ## PES 工作流: 几何优化 / 内坐标扫描 / 谐振频率 (v0.22.0)
 
 从「笛卡尔位移网格」升级到商用软件式的工作流 (全部基于解析梯度):

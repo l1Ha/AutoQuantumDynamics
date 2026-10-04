@@ -138,10 +138,13 @@ def harmonic_frequencies(calc, symbols: Sequence[str], coords: np.ndarray,
     P = _transrot_basis(c, m)
     proj = np.eye(3 * natm) - P @ P.T
     Hmw = proj @ Hmw @ proj
-    evals = np.linalg.eigvalsh(Hmw)
-    # 3N-6 个最大本征值对应振动 (其余为 0)
-    nvib = 3 * natm - (5 if _is_linear(c) else 6)
-    evals = evals[-nvib:]
+    # ⚠ 必须在**平动/转动正交补空间内**对角化, 不能取"最大 nvib 个本征值":
+    #   虚频对应**负**本征值, 会排到数值零模之下而被丢掉
+    #   (H₃ 过渡态因此被误报为 0 虚频 — 真实踩过的 bug)。
+    w, V = np.linalg.eigh(proj)
+    Q = V[:, w > 0.5]                       # 振动子空间的正交基 (3N x nvib)
+    Hvib = Q.T @ Hmw @ Q
+    evals = np.linalg.eigvalsh(Hvib)
     freqs = np.sign(evals) * np.sqrt(np.abs(evals)) * AU_FREQ_TO_CM
     info = {"hessian": H, "n_imag": int((freqs < -1e-6).sum()), "masses": m}
     return np.sort(freqs), info
