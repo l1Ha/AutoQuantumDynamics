@@ -70,6 +70,26 @@ python scripts/calc_metastable_heli.py --replot book/data/he_li_metastable_pes.n
 He\*+Li 共振（Γ≈10 meV，出射电子 14.4 eV）在现有基组/活性空间下不可分辨——
 定量 Γ 需专用连续谱基组或 Feshbach 投影。
 
+## 隐式溶剂: ddCOSMO (v0.28.0)
+
+```python
+calc = PySCFCalculator(["O","H","H"], basis="6-31g*", method="mp2",
+                       solvent="water")      # 或 solvent_eps=78.3553
+E, g = calc.energy_and_gradient(coords)      # 溶剂化能量 + 梯度
+```
+
+覆盖 **SCF / post-SCF(MP2,CCSD) / TD-DFT / CASSCF** 四条路径（PySCF 的四个入口各不相同，
+不支持的组合会明确报错而非静默退回气相），内置 11 种常见溶剂介电常数。
+
+| 检验（Slurm 1558838, 71 s, exit 0, 7/7） | 结果 |
+|---|---|
+| ε→1 极限 | **0.000000** kcal/mol（严格成立）✓ |
+| 介电单调性 | −2.51 → −4.67 → −5.07 → −5.15 kcal/mol（ε=2→78.4）✓ |
+| 极性趋势 | H₂O −5.15 / CH₄ +0.01 / He −0.00 ✓ |
+| **离子 Born 标度** | Li⁺ −121.6 vs Born 估计 −102.5 → 比值 **1.19** ✓ |
+| 溶剂化梯度 vs 有限差分 | **3.6e-07** Ha/Bohr ✓ |
+| TD-DFT 溶剂位移 | 首激发 8.061 → 8.501 eV（+0.44 eV）✓ |
+
 ## 激发态: TD-DFT / TDHF (v0.27.0)
 
 ```python

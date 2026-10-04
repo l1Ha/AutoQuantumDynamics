@@ -202,6 +202,15 @@ class XTBCommandCalculator(Calculator):
                 "uhf": str(self.uhf), "accuracy": str(self.accuracy)}
 
 
+#: 常见溶剂的静态介电常数 (ddCOSMO 用)
+_SOLVENT_EPS: Dict[str, float] = {
+    "water": 78.3553, "methanol": 32.613, "ethanol": 24.852,
+    "dmso": 46.826, "acetonitrile": 35.688, "acetone": 20.493,
+    "dichloromethane": 8.93, "chloroform": 4.7113, "thf": 7.4257,
+    "toluene": 2.3741, "cyclohexane": 2.0165,
+}
+
+
 class PySCFCalculator(Calculator):
     """PySCF 从头算与 DFT 计算后端 (可选依赖; 实验性)。
 
@@ -209,6 +218,7 @@ class PySCFCalculator(Calculator):
     - **SCF 层**: RHF, ROHF, UHF, DFT (RKS/ROKS/UKS)
     - **多参考** (v0.25.0–v0.26.0): CASSCF + **NEVPT2 动态相关** — 键断裂/强关联
     - **激发态** (v0.27.0): TD-DFT / TDHF (含解析梯度, `state=k` 即激发态势能面)
+    - **隐式溶剂** (v0.28.0): ddCOSMO (`solvent="water"` / `solvent_eps=78.4`)
     - **相关方法** (v0.21.0): MP2, CCSD, CCSD(T) — 带解析核梯度
       (MP2: `grad.mp2`; CCSD/(T): `grad.ccsd`, 需在梯度前调用 `ccsd_t()`)
     - **高自旋约束与自旋锁定 (spin_lock)**: 开壳层自旋纯度审计, 防止态跃迁与自旋污染
@@ -241,7 +251,9 @@ class PySCFCalculator(Calculator):
                  relativistic: Optional[str] = None,
                  active_space: Optional[Tuple[int, int]] = None,
                  pt2: Optional[str] = None,
-                 nstates: int = 5, state: Optional[int] = None):
+                 nstates: int = 5, state: Optional[int] = None,
+                 solvent: Optional[str] = None,
+                 solvent_eps: Optional[float] = None):
         self.symbols = list(symbols)
         self.basis = basis
         self.charge = charge
@@ -283,6 +295,20 @@ class PySCFCalculator(Calculator):
         # 频率等全部工作流可直接作用于**激发态势能面**。
         self.nstates = int(nstates)
         self.state = None if state is None else int(state)
+        # ddCOSMO 隐式溶剂 (v0.28.0): solvent="water" 或 solvent_eps=78.4
+        self.solvent = solvent
+        if solvent is not None or solvent_eps is not None:
+            if solvent_eps is not None:
+                self.solvent_eps = float(solvent_eps)
+            else:
+                key = str(solvent).lower()
+                if key not in _SOLVENT_EPS:
+                    raise ValueError(
+                        f"未知溶剂 {solvent!r}; 可用 {sorted(_SOLVENT_EPS)} "
+                        f"或直接给 solvent_eps=<介电常数>")
+                self.solvent_eps = _SOLVENT_EPS[key]
+        else:
+            self.solvent_eps = None
         if method.lower() == "tddft" and self.state is not None \
                 and grad_t_mode != "analytic":
             # 激发态默认有限差分梯度 (PySCF 的 TD 梯度不支持按态选择)
@@ -311,6 +337,28 @@ class PySCFCalculator(Calculator):
         self._ref_mo_occ = mo_occ
         self._initial_mo_coeff = mo_coeff
         self._initial_mo_occ = mo_occ
+
+    def _attach_solvent(self, obj, kind: str = "scf"):
+        """把 ddCOSMO 溶剂接入 SCF / post-SCF / TD / CASSCF 对象。
+
+        PySCF 的四条入口不同: ``ddcosmo_for_scf`` 接 SCF 对象;
+        ``ddcosmo_for_post_scf``/``_for_tdscf``/``_for_casscf`` 接**方法对象**
+        (其 ``._scf`` 必须已带溶剂)。不支持的组合会明确报错而非静默回退气相。
+        """
+        if self.solvent_eps is None:
+            return obj
+        from pyscf.solvent import ddcosmo
+        table = {"scf": ddcosmo.ddcosmo_for_scf,
+                 "post": ddcosmo.ddcosmo_for_post_scf,
+                 "td": ddcosmo.ddcosmo_for_tdscf,
+                 "casscf": ddcosmo.ddcosmo_for_casscf}
+        try:
+            out = table[kind](obj)
+        except Exception as exc:
+            raise CommandBackendError(
+                f"ddCOSMO 无法接入 {kind} 对象 ({type(obj).__name__}): {exc}") from exc
+        out.with_solvent.eps = self.solvent_eps
+        return out
 
     def _mol(self, coords: np.ndarray):
         from pyscf import gto
@@ -368,6 +416,10 @@ class PySCFCalculator(Calculator):
 
         mf.conv_tol = self.conv_tol
         mf.max_cycle = self.max_cycle
+        if self.solvent_eps is not None:
+            mf = self._attach_solvent(mf, "scf")
+            mf.conv_tol = self.conv_tol
+            mf.max_cycle = self.max_cycle
         if self.relativistic == "x2c":
             # X2C 标量相对论单电子哈密顿量 (PySCF: mf.x2c())
             mf = mf.x2c()
@@ -393,9 +445,10 @@ class PySCFCalculator(Calculator):
             from pyscf.data import elements
             frozen = elements.chemcore(mf.mol)
         if ref == "mp2":
-            return mp.MP2(mf, frozen=frozen), False
+            solver = mp.MP2(mf, frozen=frozen)
+            return self._attach_solvent(solver, "post"), False
         mycc = cc.CCSD(mf, frozen=frozen)
-        return mycc, ref == "ccsd(t)"
+        return self._attach_solvent(mycc, "post"), ref == "ccsd(t)"
 
     def _run(self, coords: np.ndarray, need_grad: bool = True):
         """计算能量 (Hartree), 可选计算核梯度。
@@ -456,6 +509,7 @@ class PySCFCalculator(Calculator):
         if self.method == "tddft":
             from pyscf.tdscf import rks as td_rks, rhf as td_rhf
             td = td_rks.TDDFT(mf) if self.xc else td_rhf.TDHF(mf)
+            td = self._attach_solvent(td, "td")
             td.nstates = self.nstates
             es = td.kernel()[0]                 # Hartree
             self._last_td = td
@@ -499,6 +553,7 @@ class PySCFCalculator(Calculator):
             from pyscf import mcscf
             ncas, nelecas = self.active_space
             mc = mcscf.CASSCF(mf, int(ncas), int(nelecas))
+            mc = self._attach_solvent(mc, "casscf")
             mc.conv_tol = max(self.conv_tol, 1e-8)
             mc.max_cycle = self.max_cycle
             e = float(mc.kernel()[0])
@@ -709,6 +764,8 @@ class PySCFCalculator(Calculator):
             "active_space": (f"({self.active_space[0]},{self.active_space[1]})"
                              if self.active_space else "n/a"),
             "pt2": str(self.pt2 or "none"),
+            "solvent": (f"{self.solvent or 'custom'} (eps={self.solvent_eps})"
+                        if self.solvent_eps is not None else "none"),
             "nstates": (str(self.nstates) if self.method == "tddft" else "n/a"),
             "state": (str(self.state) if self.method == "tddft" else "n/a"),
             "grad_t_mode": (self.grad_t_mode

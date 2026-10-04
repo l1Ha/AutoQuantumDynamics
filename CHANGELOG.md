@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.28.0 — ddCOSMO 隐式溶剂
+
+### Added
+
+- **ddCOSMO 隐式溶剂** (`PySCFCalculator(..., solvent="water")` 或
+  `solvent_eps=78.3553`): 内置 11 种常见溶剂的静态介电常数表, 也可直接给 ε。
+  按 PySCF 的四条不同入口分别接入:
+  `ddcosmo_for_scf` (SCF) / `_for_post_scf` (MP2/CCSD) / `_for_tdscf` (TD-DFT) /
+  `_for_casscf` (CASSCF/NEVPT2)。不支持的组合**明确报错**而非静默回退气相。
+- `provenance` 记录溶剂与介电常数, 随数据集/模型持久化。
+
+### Verified (服务器 Slurm 1558838, 71 s, exit 0, 7/7)
+
+| 检验 | 结果 |
+|---|---|
+| **A. ε→1 极限** | ΔE_solv = **0.000000** kcal/mol (严格成立) ✓ |
+| **B. 介电单调性** | −2.514 (ε=2) → −4.667 (10) → −5.069 (35.9) → **−5.154** (78.36), 严格单调 ✓ |
+| **C. 极性趋势** | H₂O **−5.154** / CH₄ +0.009 / He −0.000 kcal/mol ✓ |
+| **D. 离子 Born 标度** | Li⁺ −121.6 kcal/mol vs Born 估计 (R=1.6 Å) −102.5 → **比值 1.19 (O(1))** ✓ |
+| E. 已知量级 | H₂O/6-31G* −5.154 kcal/mol (实验 ΔG_hyd ≈ −6.3) ✓ |
+| F. 溶剂化梯度 | 解析 vs 有限差分 **3.616e-07** Ha/Bohr ✓ |
+| G. 方法路径 | MP2 −5.032 kcal/mol; TD-DFT 首激发 8.061 → **8.501 eV** (溶剂位移 +0.440 eV) ✓ |
+
 ## 0.27.0 — TD-DFT / TDHF 激发态与激发态势能面
 
 ### Added
