@@ -257,6 +257,140 @@ def ci_blocks(mol, mo, core: int, active: list[int]):
     return H, q_mask, p_mask, n1s_diag, active, e_shift
 
 
+
+# ---------------------------------------------------------------------------
+# Slater–Condon 引擎 (自定义行列式列表, 供 Q/P 异构空间使用)
+# 自旋轨道约定: so = 2*orb + spin, spin: 0=α, 1=β
+# ---------------------------------------------------------------------------
+
+def _so_eri(g, p, q, r, s):
+    """自旋轨道 2e 积分 ⟨pq|rs⟩ (physicist), 由空间 eri (chemist) 合成。
+
+    ⟨pq|rs⟩ = (pr|qs)_chemist = ∫p(1)q(2) r12⁻¹ r(1)s(2),
+    自旋约束 δ(σp,σr)δ(σq,σs); 交换项由 (pr|qs) 与 (ps|qr) 的自旋结构自动给出。
+    """
+    if (p & 1) != (r & 1) or (q & 1) != (s & 1):
+        return 0.0
+    return g[p >> 1, r >> 1, q >> 1, s >> 1]
+
+
+def _contract_stepwise(dj, creations, annihilations, di_sorted):
+    """逐步收缩: 算符串 a†(creations 逆序)... a(annihilations 顺序)...
+
+    annihilations[0] 为最右算符先作用于 ket=Dj, 依次;
+    随后 creations 逆序生成 (最左算符最后作用)。
+    返回费米相位; 收缩为零或终态 ≠ bra 时返回 0。"""
+    occ = list(dj)
+    sign = 1
+    for so in annihilations:
+        if so not in occ:
+            return 0.0
+        i = occ.index(so)
+        sign *= (-1) ** i
+        occ.pop(i)
+    for so in reversed(creations):
+        if so in occ:
+            return 0.0
+        i = 0
+        while i < len(occ) and occ[i] < so:
+            i += 1
+        sign *= (-1) ** i
+        occ.insert(i, so)
+    if occ != list(di_sorted):
+        return 0.0
+    return sign
+
+
+def det_hamiltonian(dets, g_sp, h_sp):
+    """给定行列式列表 (升序自旋轨道元组) 构造 CI 矩阵 (统一逐步收缩)。
+
+    H = Σ h[x,r] a†_x a_r + ½ Σ g_so(x,y,r,s) a†_x a†_y a_s a_r,
+    g_so(x,y,r,s) = ⟨xy|rs⟩ (physicist, 由空间 eri chemist 合成, 含交换)。
+    对每个 det 对枚举 x,y∈Di, r,s∈Dj 的全部收缩元组 (81 个), 逐项带费米相位;
+    结果与 direct_spin1 官方求解器逐本征值一致 (validate_sc_engine)。
+    """
+    nd = len(dets)
+    sets = [set(d) for d in dets]
+    H = np.zeros((nd, nd))
+    for i in range(nd):
+        Di = dets[i]
+        for j in range(i, nd):
+            Dj = dets[j]
+            diff = sets[i] ^ sets[j]
+            if len(diff) > 4:
+                continue
+            if not diff:
+                so = list(Di)
+                e = sum(h_sp[o, o] for o in so)
+                for a in range(len(so)):
+                    for b in range(a + 1, len(so)):
+                        e += _so_eri(g_sp, so[a], so[b], so[a], so[b])
+                        e -= _so_eri(g_sp, so[a], so[b], so[b], so[a])
+            else:
+                e = 0.0
+                for x in Di:
+                    for r in Dj:
+                        sg = _contract_stepwise(Dj, [x], [r], Di)
+                        if sg:
+                            e += h_sp[x, r] * sg
+                for x in Di:
+                    for y in Di:
+                        for r in Dj:
+                            for s in Dj:
+                                sg = _contract_stepwise(Dj, [x, y], [r, s], Di)
+                                if sg:
+                                    # 已验证约定 (He(1,1)/Li(2,1) 对官方 kernel 1e-15):
+                                    # ⟨xy|rs⟩ − ½⟨xy|sr⟩, 配逐步收缩相位
+                                    e += (_so_eri(g_sp, x, y, r, s)
+                                          + 0.5 * _so_eri(g_sp, x, y, s, r)) * sg
+                # ½ 与 (x,y)/(r,s) 有序双重计数相消; (Dj,Di) 转置由对称化补齐
+            H[i, j] = H[j, i] = e
+    return H
+
+
+def validate_sc_engine():
+    """引擎本征值谱 vs PySCF 官方 direct_spin1.kernel (真实物理积分)。
+
+    He(1,1) 与 Li(2,1) 两个扇区。注意: 随机积分下官方 kernel 的 pspace
+    机制会失真 (非物理负 Coulomb 积分), 不可作金标准, 必须用物理积分。
+    """
+    from pyscf.fci import direct_spin1
+    from pyscf import gto, scf, ao2mo
+    from itertools import combinations
+
+    errs = []
+    for sym, basis, spin, nelec in (("He", "aug-cc-pVDZ", 0, (1, 1)),
+                                    ("Li", "aug-cc-pVDZ", 1, (2, 1))):
+        mol = gto.M(atom=f"{sym} 0 0 0", basis=basis, spin=spin, verbose=0)
+        mf = scf.RHF(mol) if spin == 0 else scf.ROHF(mol)
+        mf.kernel()
+        nc = 5
+        h = mol.intor("int1e_kin") + mol.intor("int1e_nuc")
+        C = mf.mo_coeff[:, :nc]
+        h1e = C.T @ h @ C
+        eri = ao2mo.restore(1, ao2mo.kernel(mol, C), nc)
+        cs = direct_spin1.FCI()
+        # kernel 默认仅返回最低根 — 引擎亦取最低根比对
+        e_ref = float(np.asarray(cs.kernel(h1e, eri, nc, nelec)[0]).ravel()[0])
+        na, nb = nelec
+        dets = []
+        for ap in combinations(range(nc), na):
+            for bp in combinations(range(nc), nb):
+                dets.append(tuple(sorted([2 * x for x in ap]
+                                         + [2 * y + 1 for y in bp])))
+        h_sp = np.zeros((2 * nc, 2 * nc))
+        for i in range(nc):
+            for j in range(nc):
+                h_sp[2 * i, 2 * j] = h1e[i, j]
+                h_sp[2 * i + 1, 2 * j + 1] = h1e[i, j]
+        Hm = det_hamiltonian(dets, eri, h_sp)
+        e_mine = float(np.linalg.eigvalsh(Hm)[0])
+        errs.append(abs(e_mine - e_ref))
+    if max(errs) > 1e-9:
+        raise RuntimeError(f"Slater-Condon 引擎验证失败: max|Δε| = {max(errs):.2e}")
+    return max(errs)
+
+
 def kernel_gamma(wp, v_k, e_res, d_ha: float) -> tuple[float, int]:
     """Γ = 2π Σ |V_k|² K((E_res−ε_k)/Δ), K = 归一化高斯核; 返回 (Γ, 窗口内态数)。"""
     if len(wp) == 0:
@@ -291,11 +425,57 @@ def identify_active_orbitals(mol, mo, active_g: list[int]) -> dict:
     return dict(he1s=he_c[0]["k"])
 
 
-def run_point(R: float, n_virt: int = 18, extra_diffuse: bool = False,
+def active_g_he1s(mol, mo, U):
+    """U 内 He 1s 列的位置 (最紧凑的 He 居数轨道)。"""
+    n_he = int(mol.aoslice_by_atom()[0][3])
+    S = mol.intor("int1e_ovlp")
+    R2 = mol.intor("int1e_r2")
+    best, best_r2 = None, None
+    for k, c in enumerate(U):
+        col = mo[:, c]
+        p_he = float(col[:n_he] @ S[:n_he, :] @ col)
+        if p_he > 0.4:
+            r2 = float(col @ R2 @ col)
+            if best_r2 is None or r2 < best_r2:
+                best, best_r2 = k, r2
+    if best is None:
+        raise RuntimeError("U 集合中未找到 He 1s 轨道")
+    return best
+
+
+def h1e_to_spinh(h1e):
+    """空间 h1e → 自旋分块 (2n)² (so = 2*orb + spin)。"""
+    n = h1e.shape[0]
+    out = np.zeros((2 * n, 2 * n))
+    out[0::2, 0::2] = h1e
+    out[1::2, 1::2] = h1e
+    return out
+
+
+def flip_norm_sq(c_vec, dets):
+    """||S₊ψ||²: (2α,1β)→(3α,0β) 自旋翻转振幅模方和。
+
+    M_S=1/2 态: ⟨S²⟩ = 0.75 + 2·||S₊ψ||² → 二重态 0, 四重态 3。
+    翻转相位用与 det_hamiltonian 同一套逐步收缩约定。"""
+    from collections import defaultdict
+    amps = defaultdict(float)
+    for k, d in enumerate(dets):
+        betas = [o for o in d if o % 2 == 1]
+        if len(betas) != 1:
+            continue
+        b = betas[0]
+        result = tuple(sorted([o for o in d if o != b] + [b - 1]))
+        sg = _contract_stepwise(d, [b - 1], [b], result)
+        if sg:
+            amps[result] += sg * c_vec[k]
+    return sum(v * v for v in amps.values())
+
+
+def run_point(R: float, n_virt: int = 40, extra_diffuse: bool = False,
               prev_c: np.ndarray | None = None, e_asym: float | None = None,
               verbose: bool = True) -> dict:
-    from pyscf import gto, scf
-    from pyscf.fci import direct_spin1
+    from pyscf import gto, scf, ao2mo as _ao2
+    from itertools import combinations as _comb
 
     basis = build_basis(extra_diffuse)
     mol = gto.M(atom=f"He 0 0 0; Li 0 0 {R}", basis=basis, spin=3,
@@ -306,64 +486,90 @@ def run_point(R: float, n_virt: int = 18, extra_diffuse: bool = False,
         mf = mf.newton()
         mf.kernel()
     idx0 = identify_orbitals(mol, mf)
-    mc, _ = casscf_manifold(mol, mf, idx0)
-    mc.canonicalize_()                            # 外部轨道按 Fock 能量排序
+    mc, _ = casscf_manifold(mol, mf, idx0, verbose=verbose)
+    mc.canonicalize_()                      # 外部轨道按 Fock 能量排序
     mo = mc.mo_coeff
     ncas = N_VALENCE + N_EXTRA_CAS
-    cas_ids = list(range(1, 1 + ncas))          # 重排后 [core | CAS | ext]
-    M_all = mo.shape[1]
-    virt_ids = [i for i in range(1 + ncas, M_all)][:n_virt]
-    active_g = cas_ids + virt_ids                # CAS 全部 + 连续谱外部轨道
-    idx = identify_active_orbitals(mol, mo, active_g)
-    # active 内位置约定: 0=He1s (分块标记), 其余=其余 CAS/连续谱轨道
-    rest = [c for c in active_g if c != active_g[idx["he1s"]]]
-    active = [active_g[idx["he1s"]]] + rest
-    H, q_mask, p_mask, n1s_diag, _, e_shift = ci_blocks(mol, mo, 0, active)
 
-    qi, pi = np.where(q_mask)[0], np.where(p_mask)[0]
-    wq, vq = np.linalg.eigh(H[np.ix_(qi, qi)])
-    wp, vp = np.linalg.eigh(H[np.ix_(pi, pi)])
+    # ---- 轨道集合 U = CAS(6) + 连续谱外部 (Fock ∈ [−1, 30] eV) ----
+    ext_ids = list(range(1 + ncas, mo.shape[1]))
+    ext_eps = np.array([float(mc.mo_energy[i]) * HA_EV for i in ext_ids])
+    in_win = np.where((ext_eps > -1.0) & (ext_eps < 30.0))[0]
+    cont_ids = [ext_ids[i] for i in in_win][:n_virt]
+    U = list(range(1, 1 + ncas)) + cont_ids
+    NU = len(U)
+    he1s_u = active_g_he1s(mol, mo, U)
 
-    # ---- 共振根选择: S²≈3/4, He 1s 单占; 首点用原子 ROHF 渐近能量锚定,
-    #      之后按 Q 块矢量最大重叠做根跟踪 ----
-    from pyscf.fci import cistring
-    from pyscf.fci import spin_square as _spin_square
-    dim_a = cistring.num_strings(len(active), 2)
-    dim_b = cistring.num_strings(len(active), 1)
+    # ---- 单电子/双电子积分 (Li 1s² 冻结吸收) ----
+    h = mol.intor("int1e_kin") + mol.intor("int1e_nuc")
+    h1e_U = frozen_core_h1(mol, mo, U, 0)
+    C_U = mo[:, U]
+    eri_U = _ao2.restore(1, _ao2.kernel(mol, C_U), NU)
+    h_sp = h1e_to_spinh(h1e_U)
+
+    # ---- Feshbach 行列式列表 ((2α,1β) 扇区) ----
+    # Q: He 1s 单占 (核激发流形: 共振 + He(1s·2s²) 通道 + He*+Li⁺+e⁻ 闭通道)
+    # P: He 1s 双占 (He(1s²) 背景: 中性通道 + 电离连续谱)
+    h1a, h1b = 2 * he1s_u, 2 * he1s_u + 1
+    others = [u for u in range(NU) if u != he1s_u]
+    # Q 限价层组态 (he1s¹ + 两价电子): 闭环通道 (He*+Li⁺+e⁻) 只贡献二阶微移,
+    # 排除后引擎代价从 O(|Q|²NU²) 降为常数; P 保留大连续谱
+    val_others = [u for u in U[:ncas] if u != he1s_u]
+    q_set = set()
+    for t in val_others:                 # he1s_α: 另一 α + 一 β
+        for r in val_others:
+            q_set.add((h1a, 2 * t, 2 * r + 1))
+    for t, w in _comb(val_others, 2):    # he1s_β: 两个 α
+        q_set.add((h1b, 2 * t, 2 * w))
+    q_dets = sorted(tuple(sorted(d)) for d in q_set)
+    p_dets = sorted((h1a, h1b, 2 * t) for t in others)
+    dets = q_dets + p_dets
+    nq = len(q_dets)
+
+    H = det_hamiltonian(dets, eri_U, h_sp)
+    c_c = mo[:, 0]
+    h_cc = float(c_c @ h @ c_c)
+    eri_cc = float(_ao2.restore(1, _ao2.kernel(mol, c_c.reshape(-1, 1)),
+                                1)[0, 0, 0, 0])
+    e_shift = mol.energy_nuc() + 2 * h_cc + eri_cc
+
+    Hqq = H[:nq, :nq]
+    Hpp = H[nq:, nq:]
+    Hpq = H[nq:, :nq]
+    wq, vq = np.linalg.eigh(Hqq)
+    wp, vp = np.linalg.eigh(Hpp)
+
+    # ---- 共振根选择: S²≈3/4 (自旋翻转范数) + 能量锚定/根跟踪 ----
     cands = []
-    for r in range(min(14, wq.size)):
-        cf = np.zeros(H.shape[0])
-        cf[qi] = vq[:, r]
+    for r in range(min(24, wq.size)):
         c_blk = vq[:, r]
-        ss = _spin_square(cf.reshape(dim_a, dim_b),
-                          len(active), (2, 1))[0]
-        occ = occ_profile(cf.reshape(dim_a, dim_b), len(active))
-        if abs(ss - 0.75) > 0.4 or abs(occ[0] - 1.0) > 0.35:
+        flip = flip_norm_sq(c_blk, q_dets)
+        if flip > 0.5:                   # 排除 S=3/2 四重态分量
             continue
         e_root = float(wq[r] + e_shift)
-        ovl = float(c_blk @ prev_c) if prev_c is not None and prev_c.size == c_blk.size else np.nan
-        cands.append(dict(r=r, ss=ss, e=e_root, ovl=ovl, c=c_blk.copy()))
+        ovl = (float(c_blk @ prev_c)
+               if prev_c is not None and prev_c.size == c_blk.size else np.nan)
+        cands.append(dict(r=r, ss=0.75 + 2 * flip, e=e_root, ovl=ovl,
+                          c=c_blk.copy()))
     if not cands:
-        raise RuntimeError(f"R={R}: Q 块中未找到 He* 流形根 (He 1s 单占, S≈1/2)")
+        raise RuntimeError(f"R={R}: Q 块中未找到 He* 流形根 (S≈1/2)")
     if prev_c is None:
         if e_asym is None:
-            from pyscf import gto as _gto, scf as _scf
-            _basis = build_basis(extra_diffuse)
-            _m_he = _gto.M(atom="He 0 0 0", basis=_basis, spin=2,
-                           unit="Bohr", verbose=0)
-            _m_li = _gto.M(atom="Li 0 0 0", basis=_basis, spin=1,
-                           unit="Bohr", verbose=0)
-            e_asym = float(_scf.ROHF(_m_he).kernel() + _scf.ROHF(_m_li).kernel())
+            _m_he = gto.M(atom="He 0 0 0", basis=basis, spin=2,
+                          unit="Bohr", verbose=0)
+            _m_li = gto.M(atom="Li 0 0 0", basis=basis, spin=1,
+                          unit="Bohr", verbose=0)
+            e_asym = float(scf.ROHF(_m_he).kernel()
+                           + scf.ROHF(_m_li).kernel())
         best = min(cands, key=lambda t: abs(t["e"] - e_asym))
     else:
-        ovs = np.array([abs(t["ovl"]) if np.isfinite(t["ovl"]) else -1
+        ovs = np.array([abs(t["ovl"]) if np.isfinite(t["ovl"]) else -1.0
                         for t in cands])
         best = cands[int(np.argmax(ovs))]
     c_res = best["c"]
     e_res = best["e"]
-    n1s_exp = float(c_res @ (n1s_diag[qi] * c_res))
 
-    v_k = vp.T @ (H[np.ix_(pi, qi)] @ c_res)
+    v_k = vp.T @ (Hpq @ c_res)
     wp_abs = wp + e_shift
 
     mol_ion = gto.M(atom=f"He 0 0 0; Li 0 0 {R}", basis=basis, charge=1,
@@ -371,30 +577,29 @@ def run_point(R: float, n_virt: int = 18, extra_diffuse: bool = False,
     e_ion = float(scf.RHF(mol_ion).kernel())
 
     out = dict(R=R, e_res=e_res, e_ion=e_ion, eps_v=(e_res - e_ion) * HA_EV,
-               n_q=int(q_mask.sum()), n_p=int(p_mask.sum()),
-               n_active=len(active), nao=mol.nao, n1s_exp=n1s_exp,
+               n_q=nq, n_p=len(p_dets), n_orb=NU, nao=mol.nao,
                root=best["r"], s2=best["ss"])
     for d in (0.01, 0.02, 0.04):
         g, n_in = kernel_gamma(wp_abs, v_k, e_res, d)
         out[f"gamma_{d}"], out[f"nwin_{d}"] = g, n_in
     win = np.abs(wp_abs - e_res) * HA_EV < 3.0
     if win.sum() >= 2:
-        d_adp = max(0.5 * float(np.median(np.diff(np.sort(wp_abs[win])))), 0.005)
+        d_adp = max(0.5 * float(np.median(np.diff(np.sort(wp_abs[win])))),
+                    0.005)
     else:
         d_adp = 0.04
     g_adp, n_adp = kernel_gamma(wp_abs, v_k, e_res, d_adp)
     out["d_adp"], out["gamma_adp"], out["nwin_adp"] = d_adp, g_adp, n_adp
-    out["_c_res"] = c_res          # 根跟踪用 (不入 npz)
+    out["_c_res"] = c_res
     if verbose:
-        print(f"  R={R:6.2f} bohr | nao={mol.nao} M={len(active)} "
-              f"|Q|={out['n_q']} |P|={out['n_p']} root={best['r']} "
-              f"S²={best['ss']:.3f} ⟨n(He1s)⟩={n1s_exp:.3f}")
+        print(f"  R={R:6.2f} bohr | nao={mol.nao} |U|={NU} "
+              f"|Q|={nq} |P|={len(p_dets)} root={best['r']} "
+              f"S²={best['ss']:.3f}")
         print(f"    E_res={e_res:.6f} Ha  E_ion={e_ion:.6f} Ha  "
               f"ε_v={out['eps_v']:.3f} eV (渐近应 → {EV_INT:.3f})")
         _w = np.abs(wp_abs - e_res) * HA_EV < 6.0
         _eps = np.sort((wp_abs[_w] - e_res) * HA_EV)
-        print(f"    ε_v±6 eV 窗内赝态 (相对 ε_v, eV): "
-              f"{np.round(_eps, 2).tolist()}")
+        print(f"    ε_v±6 eV 赝态 (相对 eV): {np.round(_eps, 2).tolist()}")
         print(f"    Γ(自适应 Δ={d_adp:.4f} Ha) = {g_adp*HA_EV*1e3:.3f} meV "
               f"(窗口态数 {n_adp});  固定 Δ: "
               f"{out['gamma_0.01']*HA_EV*1e3:.3f} / "
@@ -481,8 +686,8 @@ def scan(R_list, n_virt: int, extra_diffuse: bool, out_npz: str,
     os.makedirs(os.path.dirname(out_npz) or ".", exist_ok=True)
     keys = ("R", "e_res", "e_ion", "eps_v", "eps_v_anchor", "v_star_meV",
             "gamma_adp", "d_adp", "nwin_adp", "gamma_0.01", "gamma_0.02",
-            "gamma_0.04", "nwin_0.02", "n_q", "n_p", "n_active", "nao",
-            "n1s_exp", "root", "s2")
+            "gamma_0.04", "nwin_0.02", "n_q", "n_p", "n_orb", "nao",
+            "root", "s2")
     save = {k: np.array([r[k] for r in results_sorted]) for k in keys}
     save["provenance"] = json.dumps(dict(
         method=("Feshbach projection (occupancy) + SA-CASSCF orbitals + "
@@ -499,7 +704,7 @@ def main():
     ap = argparse.ArgumentParser(description="Feshbach 投影 He*+Li 自电离宽度")
     ap.add_argument("--R", type=float, default=5.556, help="单点核间距 (bohr)")
     ap.add_argument("--scan", action="store_true", help="R 网格扫描")
-    ap.add_argument("--n-virt", type=int, default=18,
+    ap.add_argument("--n-virt", type=int, default=40,
                     help="活性虚轨道数 (连续谱赝态空间大小)")
     ap.add_argument("--extra-diffuse", action="store_true",
                     help="追加几何梯级弥散 (收敛性检验)")

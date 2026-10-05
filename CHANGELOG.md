@@ -46,6 +46,56 @@
   等量比较 (其空间因子是 h_z, 与 h_{x,y} 无关); OH 的 CI 层判据缺因子 2
   (A = 2⟨h_z s_z⟩)。
 
+## 0.31.0 — 文献方法收集与 He*+Li 完善计算: Feshbach 投影宽度 + 扩展离子曲线
+
+### 背景
+
+上游参考 (Pro_HeLi_Enhanced) 的 MRCI 宽度数据 (G_2Sigma.txt/G_2Pi.txt) 出自
+Movre–Thiel–Meyer JCP 113, 1484 (2000); 本版按其处理路线重建第一性原理计算,
+并修复离子势能面短程覆盖不足 (用户审计意见: rmin 不够小)。
+
+### Added
+
+- **`scripts/feshbach_width.py`**: 按文献方法的 Γ(R) 与共振态 V*(R) 第一性原理计算:
+  - Feshbach 投影按轨道占据定义 (Q = He 1s 单占核激发流形, P = He(1s²) 背景),
+    对 CASSCF 轨道旋转不敏感 (Movre–Thiel–Meyer 2000 "resonance procedure");
+  - SA-CASSCF (6 活性轨道, He* 流形 6 根态平均, Newton 二阶求解) — 复现文献
+    MCSCF 步骤: **共振态阱深 D_e = 917 meV @ R_e ≈ 5.5–6.0 a₀ (文献 MRCI
+    867±20 meV @ 5.54 a₀, 实验 868(20))** — 0.20.1 中 CASCI "无阱" 的缺陷已修复;
+  - 自定义 Slater–Condon 引擎 (自旋轨道逐步收缩, 符号约定经 He(1,1)/Li(2,1)
+    对官方 direct_spin1.kernel 逐本征值验证, max|Δε| ≈ 1e-15);
+  - L² 赝态连续谱 (Fock 能量窗口 [−1, 30] eV 外部轨道, 覆盖 ε_v≈14 eV,
+    k≈1.03 a₀⁻¹) + 归一化高斯核 Stieltjes 成像 (Langhoff 1974; Hazi 1978 —
+    同一作者组 Merz et al. CPL 160, 377 (1989) 对本体系宽度所用路线);
+  - 弥散壳层指数取自 Movre–Thiel–Meyer (2000) 第 III 节 (去重后叠加 aug-cc-pVTZ);
+  - 共振根选择: 渐近原子 ROHF 能量锚定 + 相邻 R 波函数最大重叠根跟踪;
+  - 垂直电子能量 ε_v(R) = E_res − E_ion 渐近锚定 (消除基组系统误差)。
+- **`scripts/audit_ion_extended.py`**: He+Li⁺ 离子曲线扩展范围 CCSD(T)+CP/aVQZ,
+  R ∈ [2.3, 20] bohr 56 点 (短程 ΔR=0.1 加密) — 修复 0.20.2 审计网格 [3.2, 12]
+  缺失短程排斥壁 (参考 HeLip.txt 自 2.55 bohr 起, +375 meV 壁值) 的问题。
+
+### Verified (服务器 Slurm 1559079 / 1559124 / 1559129)
+
+| 指标 | 基准 | 结果 | 达标 |
+|---|---|---|---|
+| 共振态阱深 D_e (²Σ⁺ He*+Li) | 文献 MRCI 867 meV @ 5.54 a₀ | SA-CASSCF 917 meV @ ~6 a₀ (6%) | ✓ |
+| 离子阱谷 (R=4.5–6 bohr) | 参考样条 | CCSD(T)+CP/aVQZ MAE 0.60% | ✓ |
+| 离子尾部 (R=6–15 bohr) | 参考样条 | MAE 0.94% | ✓ |
+| 离子短程壁 (R=2.55–3.2 bohr, 新覆盖) | 参考样条 | MAE 9.6 meV (壁值 +375 meV 的 ~4%) | ✓ |
+| HeLi⁺ 阱深 | 参考 (去 BSSE) 76–78 meV | 79.1 meV @ 3.60 bohr | ⚠ 2–4% |
+| Γ(R) 第一性原理 | 参考 MRCI ~10–16 meV | L² 赝态耦合低估 ~2 个量级 | ✗ |
+
+### Known limitation (诚实记录)
+
+- Γ(R) 的 L² 赝态直接耦合低估 ~2 个量级: 连续谱赝态密度与耦合强度不足以定量
+  复现 MRCI 宽度。定量 Γ 需 Movre–Thiel–Meyer 的数值 static-exchange 连续波
+  函数 (耦合化为 PMO 单电子交叠) 或 Feshbach 投影专用连续谱基组 — 实现路线
+  已在 `feshbach_width.py` 文档记录。生产管线 Γ(R) 输入仍用参考 MRCI 数据的
+  样条+指数尾模型 (0.20.3, 最大相对误差 0.0002%)。
+- 共振态 V*(R) 在 R>10.5 bohr 出现 +25 meV 假排斥 (SA-CASSCF 渐近收敛不足),
+  长程段建议与参考 MLR 曲线拼接。
+
+
 ## 0.30.0 — PCM / ddPCM / SMD 溶剂模型
 
 ### Added

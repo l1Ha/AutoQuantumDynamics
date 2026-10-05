@@ -74,6 +74,11 @@ def main():
                 label=f"参考 MLR: {lab}")
     ax.plot(Rg, v4, "r.-", lw=2.2, ms=9, label="本工作 CASCI: ⁴Σ⁺ (自旋禁阻)")
     ax.plot(Rg, v2, "b.-", lw=2.2, ms=9, label="本工作 CASCI: ²Σ⁺ 基态")
+    vstar_npz = os.path.join("results", "feshbach_width.npz")
+    if os.path.exists(vstar_npz):
+        dv = np.load(vstar_npz, allow_pickle=True)
+        ax.plot(dv["R"], dv["v_star_meV"], "g^-", lw=2.0, ms=7,
+                label="本工作 Feshbach: ²Σ⁺ He*(2³S)+Li 共振态 (SA-CASSCF)")
     ax.axhline(0, color="gray", ls=":", lw=1)
 
     # 标注关键数值
@@ -122,6 +127,11 @@ def main():
         dd = np.load(d2, allow_pickle=True)
         ax.plot(dd["r_grid"], dd["v_unc"], "b--", lw=1.6, ms=7,
                 label="CCSD(T)/def2-QZVPPD (BSSE≈2.8 meV)")
+    dext = os.path.join("results", "audit_ion_extended.npz")
+    if os.path.exists(dext):
+        de = np.load(dext, allow_pickle=True)
+        ax.plot(de["r_grid"], de["v_cp"], "m-", lw=1.4,
+                label="CCSD(T)+CP/aVQZ 扩展范围 [2.3, 20] bohr (短程加密)")
     ax.axhline(0, color="gray", ls=":", lw=1)
     ax.set_xlabel("R (bohr)"); ax.set_ylabel(r"$V^+$(R)  (meV)")
     ax.set_title("(b) 离子出射通道: 迭代至阱区误差 < 1%")
