@@ -75,6 +75,27 @@ python scripts/calc_metastable_heli.py --replot book/data/he_li_metastable_pes.n
 He\*+Li 共振（Γ≈10 meV，出射电子 14.4 eV）在现有基组/活性空间下不可分辨——
 定量 Γ 需专用连续谱基组或 Feshbach 投影。
 
+## 大活性空间: CASCI + 选择组态 CI (v0.33.0)
+
+```python
+calc = PySCFCalculator(["N","N"], basis="cc-pvdz", method="casci",
+                       active_space=(14,14), fci_solver="sci",
+                       sci_select_cutoff=1e-4, sci_ci_coeff_cutoff=1e-6)
+E = calc.energy(coords)      # 稠密 FCI 维数 1.18e7, 端到端 ~9 s
+```
+
+| 检验（Slurm 1559215, 133 s, exit 0, A–E 全绿） | 结果 |
+|---|---|
+| **精确性** | SCI (紧阈值) ≡ 稠密 FCI: CAS(6,6)/STO-3G 与 CAS(8,8)/cc-pVDZ 均 \|Δ\| < 1e-6 Ha ✓ |
+| **大活性空间** | **CASCI(14,14)/cc-pVDZ**（稠密 11,778,624 维）**9 s** 完成；比 CCSD(T) 高 198.7 mHa（无动态相关，合理）✓ |
+| 变分单调性 | 阈值 1e-3 → 1e-4 下降，1e-4 与 1e-5 差 **0.003 mHa**（已收敛）；全程单调不升 ✓ |
+| 势能曲线 | CASSCF(8,8) R_e = **1.1220 Å** vs 实验 1.098（+2.19%）；CASCI-SCI(14,14) R_e = **1.1215 Å**（一致 **0.0005 Å**），曲线平滑 ✓ |
+
+⚠ 实测限制：PySCF 的 **CASSCF 驱动与 SCI 的 RDM 接口不兼容**（SCI 的 CI 对象是
+`(civec, ci_strs)` 扩展形式）→ `method="casscf"`+`fci_solver="sci"` 会明确报错并
+指向 `method="casci"`；CASCI 无轨道优化（短 R 处比小活性空间 CASSCF 高 30.4 mHa，
+两者互补）。
+
 ## 态平均 CASSCF 激发态 (+ NEVPT2) (v0.32.0)
 
 ```python

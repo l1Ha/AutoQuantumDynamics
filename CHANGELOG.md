@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.33.0 — 选择组态 CI (selected_ci): 大活性空间
+
+### Added
+
+- **`method="casci"`** (固定 SCF 轨道上的多组态 CI): 传统 CASCI 单点;
+  `state=k`/`nstates` 支持多根 (仅**显式**要态时才多根, 避免 nstates 的
+  TD-DFT 默认值 5 被静默带入), 梯度中心有限差分。
+- **`fci_solver="sci"`** (选择组态 CI, `pyscf.fci.selected_ci.SCI`):
+  以微扰选择阈值 `sci_select_cutoff` + 系数剪枝 `sci_ci_coeff_cutoff` 构筑
+  选择空间 → 可处理 **CAS(14,14) (稠密维数 1.18e7)** 这类无法直接对角化的
+  活性空间 (实测 N₂/cc-pVDZ 端到端 **9 s**)。
+- **`spin_pure_fci`** 三态开关 (None=auto): auto 下多根/态平均自动装入
+  `fix_spin_` (必需), 单根保持历史行为 (向后兼容); 显式 True/False 可覆盖。
+- CLI: `--fci-solver {dense,sci}`、`--sci-select-cutoff`、
+  `--sci-ci-coeff-cutoff`、`--no-spin-pure-fci`; 4 项新 Mock 测试 (共 156 项)。
+
+### Fixed / 实测限制 (如实记录)
+
+- **CASSCF 驱动与 SCI 不兼容**: PySCF 的 CASSCF 会调用求解器的
+  `make_rdm1/contract_ss`, 而 `selected_ci.SCI` 的 CI 对象是
+  `(civec, ci_strs)` 扩展形式 → 实测 "cannot unpack non-iterable NoneType"。
+  故 `method="casscf"` + `fci_solver="sci"` 会**明确报错**并指向
+  `method="casci"` (大活性空间的正确落点)。
+- 测试设计教训: CAS(8,8)/STO-3G 触发 `nvir >= 0` 断言 —— N₂/STO-3G 仅 10
+  个轨道, 活性空间放不下 (属测试设计错误, 已改用 CAS(6,6)/STO-3G 与
+  CAS(8,8)/cc-pVDZ)。
+
+### Verified (服务器 Slurm 1559215, 133 s, exit 0, A–E 全绿)
+
+| 组 | 结果 |
+|---|---|
+| A. 精确性 | SCI (紧阈值) ≡ **稠密 FCI**: CAS(6,6)/STO-3G 与 CAS(8,8)/cc-pVDZ 均 \|Δ\| < 1e-6 Ha |
+| B. 大活性空间 | N₂/cc-pVDZ **CASCI(14,14)** (稠密 11,778,624 维) → SCI **9 s** 完成; 比 CCSD(T) 高 198.7 mHa (CASCI 无动态相关, 合理) |
+| C. 变分单调性 | 阈值 1e-3 → 1e-4 能量下降, 1e-4 与 1e-5 相差 **0.003 mHa** (已收敛), 全程单调不升 |
+| D. 势能曲线 | 稠密 CASSCF(8,8): R_e = **1.1220 Å vs 实验 1.098 (+2.19%)**; CASCI-SCI(14,14): R_e = **1.1215 Å** (两者一致到 **0.0005 Å**), 曲线平滑 (跳变比 4.59) |
+| E. 回归 | 默认路径复现归档精确值 H₂/STO-3G CAS(2,2) = **−1.137275944** (Δ 3.8e-10) |
+
+**诚实边界**: CASCI 在 SCF 轨道上进行、**无轨道优化** → 能量可高于小活性空间
+的 CASSCF (实测短 R 处 +30.4 mHa); 大活性空间-CASCI 与小活性空间-CASSCF
+互补, 键长趋势一致 (1.1220 vs 1.1215 Å)。
+
 ## 0.32.0 — 态平均 CASSCF 激发态 (+ 激发态 NEVPT2)
 
 ### Added
