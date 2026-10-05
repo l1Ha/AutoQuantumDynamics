@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.31.0 — 自旋-轨道耦合 (单电子 Breit–Pauli, 含两处真实根因修复)
+
+### Added
+
+- **SOC 模块** (`autoquantum/pes/soc.py`, 约 500 行, 三层接口):
+  - 积分层 `soc_integrals/soc_integrals_mo`: 逐原子 `Z_A l_A/r_A³`, 含 α²/2;
+  - 轨道层 `soc_zeta` + `auto_soc_orbitals` (线性分子用**轴向角动量 |Λ|**
+    判别 π/σ) → 原子 ²P 分裂 = (3/2)ζ, 线性分子 ²Π 分裂 = |ζ|;
+  - 态相互作用层 `soc_matrix_states` (行列式级跃迁密度, 含**自旋翻转**块)
+    + `soc_state_interaction` (单重态-三重态耦合矩阵, cm⁻¹)
+    + `so_coupled_energies` (精细结构分辨耦合势 = SOC-PES)。
+- **计算器接口** `PySCFCalculator.soc_terms` / `.soc_state_interaction`;
+  CLI 子命令 `autoquantum soc` (`--orbitals/--term/--z-eff/--active-orbitals`)。
+- 10 项本地单元测试 (假 cistring, 手工可验证的行列式代数与前置因子)。
+
+### Fixed (两处真实根因, 均由服务器验证抓出)
+
+1. **缺 −i 因子使态相互作用 SOC 恒为零**: libcint 的 `int1e_prinvxp` 返回
+   `(r×∇)/r³` 的**实**矩阵, 而物理角动量 `l = −i(r×∇)` → 之前矩阵变成
+   *反 Hermitian*, 末端的 Hermitian 对称化把矩阵元**完全抵消为零**。
+   轨道层 ζ 只取 |本征值|, 对该相位不敏感, 因此长期未暴露。
+2. **`with_common_origin` 对 `int1e_prinvxp` 无效**: 该积分的 1/r³ 起点由
+   **rinv 原点**控制 → 结果随分子平移漂移 (实测 He⁺ 平移后 ζ 由 3.874 变
+   0.005 cm⁻¹)。改用 `with_rinv_at_nucleus(ia)` 后平移不变性恢复到数值噪声级。
+
+### Verified (服务器 Slurm 1559052, 19 s, exit 0, A–G 全绿)
+
+| 组 | 结果 |
+|---|---|
+| A. 类氢**精确**标定 | ζ = α²Z⁴/48 → 比 **0.99997** (n_p=18); ²P 分裂 5.84348 vs 精确 α²Z⁴/32 = 5.84366 cm⁻¹ |
+| B. 原子 ²P vs 实验 | F 588.89 vs 404.14 (**1.457**)、Cl 985.24 vs 882.36 (**1.117**)、Br 3669.56 vs 3685.30 (**0.996**) → 随 Z 逼近实验 (二电子项缺失的系统行为) |
+| C. 平移/旋转不变性 | 平移 4.8e-6 cm⁻¹ (相对 3.8e-7); 旋转后耦合矢量模² 相对差 8.5e-14 |
+| D. C₂ᵥ 选择定则 | 积分层只有 B₂ 分量非零 (h_y, h_z ~1e-19); 态层 \|c(M=±1)\| **严格等量** (12.601551 = 12.601551), \|c(M=0)\| = 5.8e-15 |
+| E. OH ²Π 两层交叉验证 | 轨道层 ζ_π = 226.1803 = CI 层 2\|<Π_a\|H_SO\|Π_b\| (相对差 6.3e-16); vs 实验 A=139.2 → 比 1.63; A(R) 225→228 cm⁻¹ |
+| F. 自旋纯度 | ⟨S²⟩ 单重态 0.000000 / 三重态 2.000000; SOC 矩阵 Hermitian 偏差 0.00e+00 |
+| G. 密度与 WET | 跃迁密度 vs PySCF `make_rdm1s/trans_rdm1s` **2.1e-16**; CI 布局恒等式 ΣD_aa=2, ΣD_bb=1; Wigner–Eckart \|c(+1)\|=\|c(−1)\| 严格相等 |
+
+### Honest limits (如实记录)
+
+- 仅**单电子** Breit–Pauli: 二电子 SOC/屏蔽未实现 → 轻元素系统性偏大
+  (F 1.46×, Cl 1.12×), 重元素接近实验 (Br 1.00×); 提供 `z_eff` 经验修正选项。
+- 测试设计教训 (均已修正并写入验证脚本注释): CH₂ 几何 Å/Bohr 单位混用
+  (C–H 被压到 0.58 Å) 曾使电子态全错; Wigner–Eckart 判据误把 M=0 分量纳入
+  等量比较 (其空间因子是 h_z, 与 h_{x,y} 无关); OH 的 CI 层判据缺因子 2
+  (A = 2⟨h_z s_z⟩)。
+
 ## 0.30.0 — PCM / ddPCM / SMD 溶剂模型
 
 ### Added

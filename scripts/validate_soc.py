@@ -110,6 +110,27 @@ def bare_hydrogenic_p_orbitals(mol, n_take=3):
     return C, w[pick]
 
 
+def ch2_geometry(distort: float = 0.0) -> np.ndarray:
+    """CH₂ 几何 (Bohr): C–H = 1.1023 Å, ∠HCH = 136°, 分子位于 **xz 平面**。
+
+    ⚠ 单位教训: 早前版本把 C–H 的 Å 数值直接当 Bohr 用 (0.58 Å 的压缩几何),
+    电子态被彻底改变 —— ROHF 收敛到错误的多重度/对称性, 使 SOC 矩阵元假零。
+    """
+    rc = 1.1023 / 0.529177210903          # Å → Bohr
+    th = np.deg2rad(136.0)
+    xh, zh = rc * np.sin(th / 2.0), rc * np.cos(th / 2.0)
+    c = np.array([[0.0, 0.0, 0.0], [-xh, 0.0, zh], [xh, 0.0, zh]])
+    if distort:
+        c[1] = c[1] + np.array([0.02, 0.03, -0.02]) * distort
+        c[2] = c[2] + np.array([-0.03, -0.02, 0.01]) * distort
+    return c
+
+
+def ch2_somos(mol, mf):
+    """三重态参考的两个单占据轨道 (a₁, b₂)。"""
+    return sorted([i for i in range(mol.nao) if 0 < mf.mo_occ[i] < 2])[:2]
+
+
 def ci_block(ci):
     return np.asarray(ci).ravel()
 
@@ -182,112 +203,117 @@ def test_B_atomic_fine_structure():
 def test_C_invariance():
     sec("C. 原点平移不变性 + 全局旋转不变性 (CH₂/DZ, CAS(2,2))")
     from pyscf import mcscf
-    rc, rh = 1.1023, 2.0452   # C–H, H–H 距离 (Bohr 附近)
-    xh = rh / 2.0
-    zh = np.sqrt(max(rc ** 2 - xh ** 2, 1e-9))
-    coords0 = np.array([[0.0, 0.0, 0.0],
-                        [-xh, 0.0, zh], [xh, 0.0, zh]])
+    coords0 = ch2_geometry()
     basis = "cc-pvdz"
 
     def build(coords, rot=None):
         c = coords if rot is None else coords @ np.asarray(rot).T
         mol = gto.M(atom=[("C", c[0]), ("H", c[1]), ("H", c[2])],
                     basis=basis, unit="Bohr", spin=2, verbose=0)
-        mf = scf.ROHF(mol).run(conv_tol=1e-10)   # 三重态参考 (2S=2)
+        mf = scf.ROHF(mol).run(conv_tol=1e-10)
         return mol, mf, c
 
     def soc_bundle(mol, mf):
-        """返回 (vec_norm2, soc_matrix) —— 单-三态耦合。"""
+        """返回 (耦合矢量模², SOC 矩阵)。"""
         mo = mf.mo_coeff
-        # 活性轨道: 最高两个部分占据/近简并轨道 = a1, b1
-        orb = sorted([i for i in range(mol.nao) if 0 < mf.mo_occ[i] < 2])[:2]
+        orb = ch2_somos(mol, mf)
         mc = mcscf.CASCI(mf, 2, (1, 1))
         mc.verbose = 0
-        idx = list(orb)
-        # sort_mo: 把活性轨道放到位
-        mo_sorted = mcscf.sort_mo(mc, mo, idx, base=0)
-        h_all = soc_integrals_mo(mol, mo)      # 未排序基上取活性块
-        h_act = h_all[:, idx, :][:, :, idx]
+        mo_sorted = mcscf.sort_mo(mc, mo, orb, base=0)
+        h_all = soc_integrals_mo(mol, mo)          # 未排序基上取活性块
+        h_act = h_all[:, orb, :][:, :, orb]
         _, es, cis = casci_ci_vectors(mf, mo_sorted, 2, (1, 1), ss=0.0, nroots=1)
         _, et, cit = casci_ci_vectors(mf, mo_sorted, 2, (1, 1), ss=2.0, nroots=1)
         _, etp, citp = casci_ci_vectors(mf, mo_sorted, 2, (2, 0), ss=2.0, nroots=1)
         _, etm, citm = casci_ci_vectors(mf, mo_sorted, 2, (0, 2), ss=2.0, nroots=1)
         states = [
             {"ci": cis[0], "nelec": (1, 1), "label": "1A1"},
-            {"ci": cit[0], "nelec": (1, 1), "label": "3B1(M=0)"},
-            {"ci": citp[0], "nelec": (2, 0), "label": "3B1(M=+1)"},
-            {"ci": citm[0], "nelec": (0, 2), "label": "3B1(M=-1)"},
+            {"ci": cit[0], "nelec": (1, 1), "label": "3(M=0)"},
+            {"ci": citp[0], "nelec": (2, 0), "label": "3(M=+1)"},
+            {"ci": citm[0], "nelec": (0, 2), "label": "3(M=-1)"},
         ]
         H = soc_matrix_states(h_act, states)
         vec = np.array([H[0, 1], H[0, 2], H[0, 3]])
-        return float(np.sum(np.abs(vec) ** 2)), H, (es, et, etp, etm)
+        return float(np.sum(np.abs(vec) ** 2)), H
 
     mol0, mf0, c0 = build(coords0)
-    n0, H0, _ = soc_bundle(mol0, mf0)
-    # 平移 (任意矢量)
+    n0, H0 = soc_bundle(mol0, mf0)
     shift = np.array([3.1, -2.4, 5.7])
     mol1, mf1, c1 = build(coords0 + shift)
-    n1, H1, _ = soc_bundle(mol1, mf1)
+    n1, H1 = soc_bundle(mol1, mf1)
     d_trans = float(np.abs(H0 - H1).max())
-    # 旋转 (随机正交矩阵)
+    trans_scale = max(float(np.abs(H0).max()), 1e-30)
+    trans_rel = d_trans / trans_scale
+    if trans_rel > 1e-5:
+        print(f"  [诊断] 原始几何: SOMO={ch2_somos(mol0, mf0)} "
+              f"occ={np.round(np.asarray(mf0.mo_occ)[ch2_somos(mol0, mf0)],3).tolist()} "
+              f"e={np.round(np.asarray(mf0.mo_energy)[ch2_somos(mol0, mf0)],5).tolist()}",
+              flush=True)
+        print(f"  [诊断] 平移几何: SOMO={ch2_somos(mol1, mf1)} "
+              f"occ={np.round(np.asarray(mf1.mo_occ)[ch2_somos(mol1, mf1)],3).tolist()} "
+              f"e={np.round(np.asarray(mf1.mo_energy)[ch2_somos(mol1, mf1)],5).tolist()}",
+              flush=True)
+        print(f"  [诊断] H0=\n{np.round(H0, 5)}\n  [诊断] H1=\n{np.round(H1, 5)}",
+              flush=True)
     rng = np.random.default_rng(20261004)
-    A = rng.normal(size=(3, 3))
-    Q, _ = np.linalg.qr(A)
+    Q, _ = np.linalg.qr(rng.normal(size=(3, 3)))
     if np.linalg.det(Q) < 0:
         Q[:, 0] *= -1
     mol2, mf2, c2 = build(coords0, rot=Q)
-    n2, H2, _ = soc_bundle(mol2, mf2)
+    n2, H2 = soc_bundle(mol2, mf2)
     d_rot = abs(n0 - n2) / max(n0, 1e-30)
-    good = (d_trans < 1e-8) and (d_rot < 1e-6) and n0 > 1e-12
-    print(f"  平移 SOC 矩阵最大偏差 = {d_trans:.2e} (<1e-8)", flush=True)
-    print(f"  旋转耦合矢量模² : 原 {n0:.6e} vs 旋转后 {n2:.6e} → 相对差 "
-          f"{d_rot:.2e} (<1e-6)", flush=True)
+    good = (trans_rel < 1e-5) and (d_rot < 1e-6) and n0 > 1e-12
+    print(f"  耦合矢量模² = {n0:.6e} cm⁻² (必须 > 1e-12 → 非零耦合确实存在)")
+    print(f"  平移 SOC 矩阵最大偏差 = {d_trans:.2e} cm⁻¹ "
+          f"(相对 {trans_rel:.2e} < 1e-5; 绝对量级受 SCF/CI 1e-10 收敛限)"
+          f"  {'OK' if trans_rel < 1e-5 else 'FAIL'}", flush=True)
+    print(f"  旋转后模² = {n2:.6e} → 相对差 {d_rot:.2e} (<1e-6)", flush=True)
     print(f"  {'OK' if good else 'FAIL'}", flush=True)
     return good
 
 
 def test_D_symmetry_rules():
-    sec("D. 对称性选择定则 (CH₂ C₂ᵥ: X̃³B₁–ã¹A₁ 只有 B₁(y) 分量)")
+    sec("D. 对称性选择定则 (CH₂ C₂ᵥ, 分子在 xz 平面 → 只允许 R_x(B₂) 分量)")
     from pyscf import mcscf
-    rc, rh = 1.1023, 2.0452
-    xh = rh / 2.0
-    zh = np.sqrt(max(rc ** 2 - xh ** 2, 1e-9))
-    coords = np.array([[0.0, 0.0, 0.0], [-xh, 0.0, zh], [xh, 0.0, zh]])
+    coords = ch2_geometry()
     mol = gto.M(atom=[("C", coords[0]), ("H", coords[1]), ("H", coords[2])],
                 basis="cc-pvdz", unit="Bohr", spin=2, verbose=0)
     mf = scf.ROHF(mol).run(conv_tol=1e-10)
-    orb = sorted([i for i in range(mol.nao) if 0 < mf.mo_occ[i] < 2])[:2]
+    orb = ch2_somos(mol, mf)
     mc = mcscf.CASCI(mf, 2, (1, 1))
     mc.verbose = 0
     mo = mcscf.sort_mo(mc, mf.mo_coeff, orb, base=0)
-    h_all = soc_integrals_mo(mol, mf.mo_coeff)   # 未排序基
-    h_act = h_all[:, orb, :][:, :, orb]
-    _, es, cis = casci_ci_vectors(mf, mo, 2, (1, 1), ss=0.0, nroots=1)
-    _, et, cit = casci_ci_vectors(mf, mo, 2, (1, 1), ss=2.0, nroots=1)
+    h_act = soc_integrals_mo(mol, mf.mo_coeff)[:, orb, :][:, :, orb]
+    _, _, cis = casci_ci_vectors(mf, mo, 2, (1, 1), ss=0.0, nroots=1)
+    _, _, cit = casci_ci_vectors(mf, mo, 2, (1, 1), ss=2.0, nroots=1)
     _, _, citp = casci_ci_vectors(mf, mo, 2, (2, 0), ss=2.0, nroots=1)
     _, _, citm = casci_ci_vectors(mf, mo, 2, (0, 2), ss=2.0, nroots=1)
-    # <S²> 纯度检查
     s2_s = spin_op.spin_square(cis[0], 2, (1, 1))[0]
     s2_t = spin_op.spin_square(cit[0], 2, (1, 1))[0]
+    # 积分层: h_x (R_x = B₂) 非零; h_y (B₁), h_z (A₂) 严格禁阻
+    hx = float(np.abs(h_act[0]).max())
+    hy = float(np.abs(h_act[1]).max())
+    hz = float(np.abs(h_act[2]).max())
+    int_ok = (hx > 1e-6) and (hy < 1e-8) and (hz < 1e-8)
     states = [
         {"ci": cis[0], "nelec": (1, 1), "label": "1A1"},
-        {"ci": cit[0], "nelec": (1, 1), "label": "3B1(M=0)"},
-        {"ci": citp[0], "nelec": (2, 0), "label": "3B1(M=+1)"},
-        {"ci": citm[0], "nelec": (0, 2), "label": "3B1(M=-1)"},
+        {"ci": cit[0], "nelec": (1, 1), "label": "3(M=0)"},
+        {"ci": citp[0], "nelec": (2, 0), "label": "3(M=+1)"},
+        {"ci": citm[0], "nelec": (0, 2), "label": "3(M=-1)"},
     ]
     H = soc_matrix_states(h_act, states)
-    c_z = abs(H[0, 1])
-    c_p = abs(H[0, 2])
-    c_m = abs(H[0, 3])
+    c_z, c_p, c_m = abs(H[0, 1]), abs(H[0, 2]), abs(H[0, 3])
     main = max(c_p, c_m)
-    good = (c_z < 1e-6 * main) and abs(c_p - c_m) < 1e-6 * main and main > 1e-6
-    print(f"  |c(M=0, z 分量)| = {c_z:.3e} cm⁻¹ → 必须 ≈ 0 (A₂ 对称性禁阻)", flush=True)
-    print(f"  |c(M=+1)| = {c_p:.6f}, |c(M=-1)| = {c_m:.6f} cm⁻¹ → B₁(y) 分量, "
-          f"两者等量", flush=True)
-    print(f"  <S²> 单重态 = {s2_s:.6f} (应 0), 三重态 = {s2_t:.6f} (应 2)", flush=True)
-    print(f"  Hermitian: 最大反对称偏差 = "
-          f"{np.abs(H - H.conj().T).max():.2e}", flush=True)
-    good &= (abs(s2_s) < 1e-6) and (abs(s2_t - 2.0) < 1e-6)
+    state_ok = (c_z < 1e-6 * max(main, 1e-30)) and \
+        (abs(c_p - c_m) < 1e-6 * main) and (main > 1e-6)
+    good = int_ok and state_ok and (abs(s2_s) < 1e-6) and (abs(s2_t - 2.0) < 1e-6)
+    print(f"  积分层 |h_x|={hx:.3e}, |h_y|={hy:.3e}, |h_z|={hz:.3e} Ha "
+          f"→ 只有 B₂ 分量  {'OK' if int_ok else 'FAIL'}", flush=True)
+    print(f"  态层 |c(M=±1)| = {c_p:.6f} / {c_m:.6f} cm⁻¹ (B₂ 允许, 等量), "
+          f"|c(M=0)| = {c_z:.2e} (A₂ 禁阻)  {'OK' if state_ok else 'FAIL'}",
+          flush=True)
+    print(f"  <S²> 单重态 = {s2_s:.6f} (应 0), 三重态 = {s2_t:.6f} (应 2); "
+          f"Hermitian 偏差 = {np.abs(H - H.conj().T).max():.2e}", flush=True)
     print(f"  {'OK' if good else 'FAIL'}", flush=True)
     return good
 
@@ -314,10 +340,13 @@ def test_E_oh_two_layer():
     states = [{"ci": ci[0], "nelec": (2, 1), "label": "Pi_a"},
               {"ci": ci[1], "nelec": (2, 1), "label": "Pi_b"}]
     H = soc_matrix_states(h_act, states)
-    zeta_ci = abs(H[0, 1])
+    # 物理关系: 两个**实** ²Π 分量之间的 SOC 矩阵元 = A/2 = ζ/2
+    # (A 为精细结构常数, A = 2<h_z s_z>); 故 2×|H[0,1]| 应等于轨道层 ζ。
+    zeta_ci = 2.0 * abs(H[0, 1])
     d_rel = abs(zeta_ci - zeta_orb) / zeta_orb
-    print(f"  轨道层 ζ_π = {zeta_orb:.4f} cm⁻¹ | CI 层 |<Π_a|H_SO|Π_b>| = "
-          f"{zeta_ci:.4f} cm⁻¹ | 相对差 {d_rel:.2e}", flush=True)
+    print(f"  轨道层 ζ_π = {zeta_orb:.4f} cm⁻¹ | CI 层 2|<Π_a|H_SO|Π_b>| = "
+          f"{zeta_ci:.4f} cm⁻¹ (因子 2: A = 2⟨h_z s_z⟩) | 相对差 {d_rel:.2e}",
+          flush=True)
     print(f"  ²Π 分裂 = |ζ| = {splitting_pi(zeta_orb):.4f} vs 实验 A = 139.2 "
           f"cm⁻¹ → 比 {splitting_pi(zeta_orb)/139.2:.3f}", flush=True)
     ok = (d_rel < 1e-6) and (0.5 < splitting_pi(zeta_orb) / 139.2 < 2.0)
@@ -418,12 +447,7 @@ def test_G_density_and_wet():
         m = gto.M(atom=[("O", 0, 0, 0), ("H", 0, 0, 1.8324)], basis="cc-pVTZ",
                   spin=1, verbose=0)
         mfr = scf.ROHF(m).run(conv_tol=1e-10)
-        occ = np.asarray(mfr.mo_occ); ee = np.asarray(mfr.mo_energy)
-        sm = [i for i in range(m.nao) if 0 < occ[i] < 2]
-        pi = list(sm) + [i for i in range(m.nao)
-                         if occ[i] < 0.5 and any(abs(ee[i] - ee[j]) < 5e-3
-                                                for j in sm)]
-        pi = sorted(set(pi))[:2]
+        pi = auto_soc_orbitals(m, mfr, n_take=2)
         mc = _mc.CASCI(mfr, 2, (2, 1)); mc.verbose = 0
         mo = _mc.sort_mo(mc, mfr.mo_coeff, pi, base=0)
         _, e, ci = casci_ci_vectors(mfr, mo, 2, (2, 1), ss=0.75, nroots=2)
@@ -438,12 +462,11 @@ def test_G_density_and_wet():
           flush=True)
 
     # --- G2: WET 三分量等量 (低对称 CH2: 全部非零且等量) ---
-    coords = np.array([[0.0, 0.0, 0.0],
-                       [-1.02, 0.07, 1.86], [1.04, -0.05, 1.90]])   # 低对称
+    coords = ch2_geometry(distort=4.0)                              # 低对称
     mol2 = gto.M(atom=[("C", coords[0]), ("H", coords[1]), ("H", coords[2])],
                  basis="cc-pvdz", unit="Bohr", spin=2, verbose=0)
     mf2 = scf.ROHF(mol2).run(conv_tol=1e-10)
-    orb = sorted([i for i in range(mol2.nao) if 0 < mf2.mo_occ[i] < 2])[:2]
+    orb = ch2_somos(mol2, mf2)
     mc = mcscf.CASCI(mf2, 2, (1, 1))
     mc.verbose = 0
     mo = mcscf.sort_mo(mc, mf2.mo_coeff, orb, base=0)
@@ -458,12 +481,16 @@ def test_G_density_and_wet():
               {"ci": citm[0], "nelec": (0, 2)}]
     H = soc_matrix_states(h_act, states)
     v = np.array([abs(H[0, 1]), abs(H[0, 2]), abs(H[0, 3])])
-    good2 = (v.min() > 1e-6) and ((v.max() - v.min()) / v.max() < 1e-8)
+    # Wigner–Eckart: 自旋因子固定 → |<¹|H_SO|³(M=+1)>| = |<¹|H_SO|³(M=-1)>|
+    # **必须严格相等**; 而 M=0 分量的空间因子是 h_z (与 h_{x,y} 无关) → 只要求
+    # 非零 (低对称下有值), 不参与等量比较 (早前把它纳入等量判据属测试设计错误)。
+    good2 = (v.min() > 1e-6) and \
+        (abs(v[1] - v[2]) < 1e-8 * v[1])
     ok &= good2
-    print(f"  WET 三分量 |c(M=0)|,|c(M=+1)|,|c(M=-1)| = "
-          f"{v[0]:.6f}, {v[1]:.6f}, {v[2]:.6f} cm⁻¹ (相对展宽 "
-          f"{(v.max()-v.min())/v.max():.2e} < 1e-8)  "
-          f"{'OK' if good2 else 'FAIL'}", flush=True)
+    print(f"  三分量 |c(M=0)|,|c(M=+1)|,|c(M=-1)| = "
+          f"{v[0]:.6f}, {v[1]:.6f}, {v[2]:.6f} cm⁻¹; "
+          f"WET |c(+1)-c(-1)|/c = {abs(v[1]-v[2])/v[1]:.2e} (<1e-8), "
+          f"全非零 {v.min() > 1e-6}  {'OK' if good2 else 'FAIL'}", flush=True)
     # 单重态-单重态 SOC 必须为零 (自旋选择定则)
     s_ss = abs(H[0, 0])
     good3 = s_ss < 1e-10

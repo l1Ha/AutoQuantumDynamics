@@ -75,6 +75,31 @@ python scripts/calc_metastable_heli.py --replot book/data/he_li_metastable_pes.n
 He\*+Li 共振（Γ≈10 meV，出射电子 14.4 eV）在现有基组/活性空间下不可分辨——
 定量 Γ 需专用连续谱基组或 Feshbach 投影。
 
+## 自旋-轨道耦合: 单电子 Breit–Pauli (v0.31.0)
+
+```python
+calc = PySCFCalculator(["O","H"], basis="cc-pvtz", spin=1, method="rohf")
+out  = calc.soc_terms(coords)              # ζ 与精细结构分裂 (cm⁻¹)
+out2 = calc.soc_state_interaction(         # 单重态-三重态耦合矩阵
+    coords, active_orbitals=[3, 4], singlet_roots=2, triplet_roots=1)
+```
+
+CLI: `autoquantum soc --input g.xyz --method rohf --basis cc-pvtz [--orbitals ...]`
+
+| 检验（Slurm 1559052, 19 s, exit 0, A–G 全绿） | 结果 |
+|---|---|
+| **类氢精确标定** | ζ = α²Z⁴/48 → 比 **0.99997**；²P 分裂 5.84348 vs 精确 5.84366 cm⁻¹ ✓ |
+| 原子 ²P vs 实验 | F 1.457、Cl 1.117、Br **0.996**（单电子 BP 随 Z 逼近实验）✓ |
+| 平移/旋转不变性 | 平移 4.8e-6 cm⁻¹（相对 3.8e-7）；旋转耦合模长相对差 8.5e-14 ✓ |
+| C₂ᵥ 选择定则 | 只有 B₂ 分量；\|c(M=±1)\| 严格等量；M=0 分量 5.8e-15 (禁阻) ✓ |
+| OH ²Π 两层交叉验证 | 轨道层 ζ = CI 层耦合 (**相对差 6.3e-16**)；vs 实验 A 比 1.63 ✓ |
+| 密度/WET | 跃迁密度 vs PySCF 参考 **2.1e-16**；\|c(+1)\|=\|c(−1)\| 严格相等 ✓ |
+
+⚠ 诚实边界：仅**单电子** Breit–Pauli（无二电子屏蔽）→ 轻元素偏大（F 1.46×）、
+重元素接近实验（Br 1.00×）；`z_eff` 可作经验修正。验证期间修复两处真实根因：
+libcint `int1e_prinvxp` 缺 −i 因子（使态相互作用矩阵元被 Hermitian 对称化抵消为零）、
+`with_common_origin` 对该积分无效（改用 `with_rinv_at_nucleus`）。
+
 ## 激发态: EOM-CCSD (v0.29.0)
 
 ```python
