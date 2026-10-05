@@ -33,6 +33,7 @@
 | **CCSD(T) + 梯度** | ✓ | ✓ | ✓ **(新)** | 能量经 FCI 交叉验证; 梯度含 (T) 项 FD 修正, vs FD: 3.54e-07 |
 | CCSD(T)-F12 / 显式相关 | ✓✓ | ✗ | ✗ | F12 是 Molpro 招牌; 需专门积分库 |
 | **CASPT2 / NEVPT2 (动态相关)** | ✓ | ✗ | ✓ **(新, NEVPT2)** | `pt2="nevpt2"`: CAS 参考 + 二阶微扰, **无侵入态**; H₂/CAS(8,2) 距 FCI 仅 **0.10 mHa** (CASSCF 0.36); LiH 改善 2.5-2.7×。⚠ PySCF 无 CASPT2 模块 (NEVPT2 为同层级稳健替代) |
+| **AVAS 自动活性空间** | ✓ | ✓ | ✓ **(新, v0.35.0)** | `avas="O 2p\|H 1s"` 由 AO 标签自动构造; 可叠加态平均/SCI/NEVPT2; 闭壳层恒等式精确 (8.5e-14); N₂ 相关 0.132 Ha; O₂ 0.096 Ha; ⚠ PySCF 的 avas 只认标签**列表**或单/正则串 (`;`/`,` 串静默给 ncas=0, 已实测标定) |
 | MRCI / RASPT2 | ✓✓ | ✗ | ✗ | 变分式多参考 CI 未实现。**多参考激发态**已可用 **态平均 CASSCF + NEVPT2(root)** (v0.32.0): vs FCI 精确 (8.9e-16); 避交叉区 CI 重叠 0.9999。**大活性空间**已可用 **CASCI + 选择组态 CI** (v0.33.0): CAS(14,14) (稠密 1.18e7 维) 9 s 完成; 小空间 ≡ 稠密 FCI (<1e-6 Ha) |
 | **CASCI + 选择组态 CI (大活性空间)** | ✓ | ✓ | ✓ **(新, v0.33.0)** | `method="casci"` + `fci_solver="sci"`: CAS(14,14)/cc-pVDZ (稠密 11,778,624 维) **9 s**; 阈值单调收敛 (末两档 0.003 mHa); R_e 与稠密 CASSCF(8,8) 一致到 **0.0005 Å**; ⚠ CASSCF 驱动与 SCI 的 RDM 接口不兼容 → 明确报错指向 casci |
 | **CASSCF / 多组态 SCF** | ✓ | ✓ | ✓ **(新)** | `method="casscf"` + `active_space=(ncas,nelecas)`; H₂ 解离区 CASSCF 误差 **0.9 mHa** vs RHF **105.6 mHa** (R=4 Bohr, 对 FCI); LiH 亦验证。⚠ 梯度默认**有限差分** (PySCF 无 CASSCF 解析梯度模块) |
@@ -71,6 +72,7 @@
 | v0.27.0 | **TD-DFT/TDHF 激发态与激发态势能面** | H₂O 最低激发 **7.605 eV vs 实验 7.4 (2.8%)**; H₂ B 态垂直激发 **12.63 vs 12.5 eV (1.0%)**; 振子强度非负且 Σf < TRK 上界; 曲线平滑与态序正确; TD-HF vs FCI 方向/量级一致 |
 | v0.28.0 | **ddCOSMO 隐式溶剂** | ε→1 极限 **0.000000** kcal/mol; 介电单调性 −2.51→−4.67→−5.07→−5.15 (ε=2→78.4); 极性趋势 H₂O −5.15 / CH₄ +0.01 / He −0.00; **Li⁺ Born 比值 1.19**; 溶剂化梯度 vs FD 3.6e-07; TD-DFT 溶剂位移 +0.44 eV |
 | v0.29.0 | **EOM-CCSD 激发态** (+ 根跟踪实验) | 单重态激发能 vs FCI **0.000 eV (完全一致)**; vs TD-DFT 0.61 eV; FD 梯度窗口内优化 ΔE −7.7 mHa、\|g\| ↓ 65×; **根跟踪重叠判据为负结果 (如实记录)** |
+| v0.35.0 | **AVAS 自动活性空间** (+ 外部依赖实测记录) | 闭壳层恒等式 **8.5e-14**; N₂ 相关 0.132 Ha; AVAS+CASSCF/SA/SCI/NEVPT2 全部可叠加; 标签格式三轮实测标定 (列表 ✓ / `;`,`,` ✗ 静默 ncas=0); **EXTERNAL_DEPS.md**: CASPT2/MRCI 生态内无实现 (GitHub 搜索 total_count=0), forge 的 dsrg_mrpt2 因 BLAS/CMake 无法构建 |
 | v0.34.0 | **复合方法 (CBS 外推 + CCSD(T) 加和)** | 三点指数 HF 外推重构误差 **0**; H₂ **R_e 0.7414 Å (0.003%)**; H₂O HF/相关两分量 CBS 都优于 QZ; 对 CBS 极限 (−1.1744757 Ha) 偏差 −1.05 mHa (5Z +0.25 mHa, 变分自洽); **过冲边界如实记录** ((QZ,5Z) 可降到 −0.90 mHa) |
 | v0.33.0 | **选择组态 CI (大活性空间 CASCI)** | SCI ≡ 稠密 FCI (<1e-6 Ha); **CAS(14,14) 稠密维数 1.18e7 → 9 s**; 变分单调收敛 0.003 mHa; R_e 1.1220 (CASSCF) vs 1.1215 Å (CASCI-SCI), 一致 0.0005 Å; 记录 CASSCF+SCI 的 RDM 接口不兼容并给出明确报错 |
 | v0.32.0 | **态平均 CASSCF 激发态 + NEVPT2(root)** | vs FCI 单重态 **8.9e-16**; 基态 = 单态 = FCI (0.0e+00); 避交叉扫描 CI 重叠 **0.999895**; NEVPT2 拉向 FCI 25.0→9.3 mHa; 修复 FD 污染跟踪参考态 + 显式开关防隐式态平均 |

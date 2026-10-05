@@ -75,6 +75,25 @@ python scripts/calc_metastable_heli.py --replot book/data/he_li_metastable_pes.n
 He\*+Li 共振（Γ≈10 meV，出射电子 14.4 eV）在现有基组/活性空间下不可分辨——
 定量 Γ 需专用连续谱基组或 Feshbach 投影。
 
+## AVAS 自动活性空间 (v0.35.0)
+
+```python
+calc = PySCFCalculator(["O","H","H"], basis="cc-pvdz", method="casscf",
+                       avas="O 2p|H 1s")     # 或 ["O 2p", "H 1s"]
+E, g = calc.energy_and_gradient(coords)       # AVAS 空间 + 轨道优化
+# 可叠加: state_average/nstates/state (激发态) | fci_solver="sci" (大空间) | pt2="nevpt2"
+```
+
+| 检验（Slurm 1559297, 14 s, exit 0, A–E 全绿） | 结果 |
+|---|---|
+| 闭壳层**恒等式** | H₂O 'O 2p' → CAS(3,6)（CI 维数 1）时 E **= RHF**（8.5e-14，数学恒等式）✓ |
+| 开壳层真相关 | N₂ ncas=7 → **0.132 Ha**；O₂ 三重态 → **0.096 Ha** ✓ |
+| AVAS + CASSCF | −76.0652 → **−76.0797**（轨道优化 0.0146 Ha）✓ |
+| 组合能力 | AVAS + 态平均 / **选择组态 CI**（5.9e-12 vs 稠密）/ NEVPT2（0.140 Ha）全部可叠加 ✓ |
+
+⚠ 实测标定：PySCF 的 `avas` 只接受**标签列表**或单标签/正则串（`'O 2p|H 1s'`）；
+`;`/`,` 分隔串会**静默返回 ncas=0** → 实现统一拆分为列表并在 provenance 记录。
+
 ## 复合方法: CBS 外推 + CCSD(T) 加和 (v0.34.0)
 
 ```python

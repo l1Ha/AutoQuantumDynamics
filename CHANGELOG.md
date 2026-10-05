@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.35.0 — AVAS 自动活性空间 + 外部依赖实测记录
+
+### Added
+
+- **AVAS 自动活性空间** (`method="casscf"|"casci"` + `avas="O 2p|H 1s"`):
+  由 AO 标签自动构造活性空间 (主库 `pyscf.mcscf.avas`), 可叠加全部既有能力:
+  态平均激发态 / 选择组态 CI / NEVPT2 / 溶剂。标签规范化支持三种写法
+  (列表 / `;` / `,`), CLI 新增 `--avas`/`--avas-threshold`。
+- **`EXTERNAL_DEPS.md`**: 对 CASPT2 / MRCI / F12 / 四分量 / G4-W1 的**外部
+  依赖可得性实测记录** (pip index / GitHub 搜索 / 基组加载 / 构建尝试的原始
+  命令与输出)。
+
+### Fixed (标签格式实测标定 — 三轮迭代才定位)
+
+- **PySCF 的 `avas` 只接受「标签列表」或「单标签/正则串」**: 传 `;` 或 `,`
+  分隔串会**静默返回 ncas=0**, 随后触发 `mcscf` 的 `assert ncas > 0`
+  (实测: `['O 2p','H 1s']` → ncas=6 ✓; `'O 2p, H 1s'` → ncas=0 ✗;
+  `'O 2p|H 1s'` → ncas=6 ✓) → 实现统一拆分为**列表**;
+- 构造函数曾 `str(avas)` 把列表变成 `"['O 2p', ...]"` → 进正则报
+  "unterminated character set" (已修)。
+
+### Verified (服务器 Slurm 1559297, 14 s, exit 0, A–E 全绿)
+
+| 组 | 结果 |
+|---|---|
+| A. 基本正确性 | **闭壳层恒等式**: H₂O 'O 2p' → CAS(3,6) (CI 维数 1) 时 E **精确等于** RHF (\|Δ\| 8.5e-14 — 数学恒等式, 非缺陷); N₂ 'N 2p' → ncas=7, 相关 **0.132 Ha** |
+| B. AVAS + CASSCF | AVAS-CASCI −76.0652 → AVAS-CASSCF **−76.0797** (轨道优化降 0.0146 Ha) |
+| C. 组合能力 | **AVAS + 态平均 CASSCF** ✓ (E0/E1 = −76.0516/−75.7636); **AVAS + 选择组态 CI** ✓ (5.9e-12 vs 稠密); **AVAS + NEVPT2** ✓ (0.140 Ha) |
+| D. 阈值敏感性 | 0.1/0.2/0.4 → ncas 与能量完全一致 (如实报告) |
+| E. 开壳层 | 三重态 O₂ 'O 2p' → ncas=7, 相关 **0.096 Ha** |
+
+### External deps (实测, 见 EXTERNAL_DEPS.md)
+
+- **CASPT2**: 生态内**无**实现 (主库 mrpt 只有 nevpt2/dfnevpt2; PyPI 无
+  `pyscf-caspt2`; GitHub `q=pyscf+caspt2` **total_count=0**); forge 的
+  `dsrg_mrpt2` 存在但**本环境无法构建** (CMake 找不到 BLAS → 手动 cmake 仍
+  "Configuring incomplete"; `libdsrg` 缺失)。→ 以 **NEVPT2** 覆盖同层级需求。
+- **MRCI**: 生态内**无** (GitHub 唯一命中 block2 = DMRG) → 以 **SA-CASSCF+
+  NEVPT2** / **CASCI+选择组态 CI** 覆盖。
+- 环境完整性已验证: H₂ CAS(2,2) = −1.137275944 (与归档逐位一致)。
+
 ## 0.34.0 — 复合方法: CBS 外推 + CCSD(T) 加和
 
 ### Added
@@ -204,8 +245,36 @@ Movre–Thiel–Meyer JCP 113, 1484 (2000); 本版按其处理路线重建第一
   函数 (耦合化为 PMO 单电子交叠) 或 Feshbach 投影专用连续谱基组 — 实现路线
   已在 `feshbach_width.py` 文档记录。生产管线 Γ(R) 输入仍用参考 MRCI 数据的
   样条+指数尾模型 (0.20.3, 最大相对误差 0.0002%)。
-- 共振态 V*(R) 在 R>10.5 bohr 出现 +25 meV 假排斥 (SA-CASSCF 渐近收敛不足),
-  长程段建议与参考 MLR 曲线拼接。
+- 共振态 V*(R) 在 R>10.5 bohr 出现 +50–120 meV 不衰减假平台且 ε_v 漂移
+  +0.8 eV: 根跟踪跨 CASSCF 轨道基的矢量重叠不可靠, 串到杂质态。阱区
+  (4–9 a₀, 热碰撞经典转折点所在) 不受影响。修复方向: 以 ε_v 连续性或
+  投影字符做根跟踪; 长程拼接参考 MLR。
+
+### 1% 最大误差迭代结论 (goal: 参考势能面最大误差 ≤ 1%)
+
+`scripts/iterate_ion_1pct.py` 在参考自身 78 个数字化 R 点上运行方法阶梯
+(未校正 CCSD(T)/FCI × cc-pVTZ/QZ/5Z/def2, 服务器 Slurm 1559260/1559261):
+
+| 区段 (R/bohr) | ccsdt_qz max\|Δ\| | FCI/cc-pVTZ 互证 | 1% 线 (0.87 meV) |
+|---|---|---|---|
+| 内壁 2.55–3.0 | 47.5 meV (55%阱深) | −10 meV | 不可达② |
+| 井壁 3.0–4.5 | 2.45 meV (2.8%) | +14 meV | 未达 |
+| 阱谷 4.5–6.0 | 2.29 (2.6%) / 对原始点 1.53 (1.8%) | +2.2 / +1.1 | 未达 |
+| 尾部 6.0–15.05 | **0.95 meV (1.09%)** | — | 边缘 |
+
+① **噪声地板**: 参考样条偏离其自身 78 个数字化点 max **3.07 meV (3.5%)**,
+   RMS 0.89 meV, 16/78 点超过 1% 线 — 任何独立计算对"样条"的 max 误差都被
+   参考自身平滑噪声硬限制, **对样条的 1% max 判据数学上不可达**;
+② **壁区 BSSE 指纹**: V⁺(R) 出自 Merz 1989 CPL 文献 [21] = "M. Meyer &
+   M. Movre, Z. Phys. D, to be published" (标注待发表, 从未刊出), 其
+   MRSCEP 专有基组的短程相关-BSSE 形状 (壁更硬 ~50 meV) 无法用公开基组
+   复现; 按用户要求禁止追调基组适配参考;
+③ 已达成的诚实口径: 尾部 max 1.09%, 阱谷 MAE 0.60%/尾部 MAE 0.94% (<1%
+   MAE 口径), 井壁+阱谷+尾部联合 max 2.45 meV (2.82%); 方法收敛性:
+   FCI/cc-pVTZ、CCSD(T)/cc-pVQZ 阱谷互差 ≤2.2 meV;
+④ 字面达 1% 的剩余路径: 获取原作者未发表基组 (不可行); 比对对象改为
+   原始数字化点并限定阱谷 (1.5–1.8%); 对参考样条去噪重拟合后重定基准
+   (需上游确认)。
 
 
 ## 0.30.0 — PCM / ddPCM / SMD 溶剂模型
