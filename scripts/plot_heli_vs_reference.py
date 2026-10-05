@@ -72,8 +72,10 @@ def main():
         pot = EntrancePotential(name)
         ax.plot(Rr, np.array([pot(x) for x in Rr]) * 1e3, ls, lw=1.8,
                 label=f"参考 MLR: {lab}")
-    ax.plot(Rg, v4, "r.-", lw=2.2, ms=9, label="本工作 CASCI: ⁴Σ⁺ (自旋禁阻)")
-    ax.plot(Rg, v2, "b.-", lw=2.2, ms=9, label="本工作 CASCI: ²Σ⁺ 基态")
+    # ⁴Σ⁺ CASCI 诊断曲线撤除: 固定轨道 CASCI 在 He*(2³S)/He*(2³P) ⁴Σ⁺ 避免交叉
+    # (R≈6–8 bohr) 处根混杂, 曲线出现 700 meV 悬崖 + BSSE 假阱, 不具物理意义;
+    # 自旋禁阻通道 Γ≡0, 不进入电离动力学。入口通道正主为下方 Feshbach ²Σ⁺ 共振态。
+    ax.plot(Rg, v2, "b.-", lw=2.2, ms=9, label="本工作 CASCI: ²Σ⁺ 基态 He(1s²)+Li")
     vstar_npz = os.path.join("results", "feshbach_width.npz")
     if os.path.exists(vstar_npz):
         dv = np.load(vstar_npz, allow_pickle=True)
@@ -88,10 +90,6 @@ def main():
                 xy=(p3["R_e"] * 1.8897, -p3["D_e"] * HARTREE_TO_EV * 1e3),
                 xytext=(9.5, -1050), fontsize=8.5, color="k",
                 arrowprops=dict(arrowstyle="->", color="k", lw=1))
-    i4 = int(np.argmax(v4[:8]))
-    ax.annotate(f"⁴Σ⁺ 避免交叉势垒 ≈{v4[i4]:.0f} meV @ R≈{Rg[i4]:.1f} bohr",
-                xy=(Rg[i4], v4[i4]), xytext=(8.5, 520), fontsize=8.5, color="r",
-                arrowprops=dict(arrowstyle="->", color="r", lw=1))
     ax.annotate("反应性 ²Σ⁺ 深阱需 MRCI 级别\n(本工作 SCF/CASCI 不可达)",
                 xy=(p3["R_e"] * 1.8897 * 0.9, -p3["D_e"] * HARTREE_TO_EV * 1e3 * 0.75),
                 xytext=(11.0, -760), fontsize=8.5, color="k",
@@ -147,11 +145,18 @@ def main():
     Rt = np.linspace(w2s.R_switch_ang, 8.0, 100)     # Å
     ax.semilogy(Rt, w2s.A_exp * np.exp(-w2s.k_exp * Rt), "k-", lw=1.8,
                 label=f"参考指数尾 $A e^{{-kR}}$ (k={w2s.k_exp:.2f} /Angstrom)")
-    # 本工作早期使用的解析模型 (bohr 单位, Ha): Γ = 0.04 exp(-1.1 R)
-    Rb = np.linspace(3.0, 20.0, 200)
-    ax.semilogy(Rb * BOHR_TO_ANGSTROM, 0.04 * np.exp(-1.1 * Rb) * 1e3 * HARTREE_TO_EV,
-                "m--", lw=1.8,
-                label=r"本工作旧模型 $\Gamma=0.04e^{-1.1R}$ Ha (R/bohr)")
+    # 本工作独立计算: Feshbach 投影 + L² 赝态成像 (Movre-Thiel-Meyer 2000 方法)
+    vf_npz = os.path.join("results", "feshbach_width.npz")
+    if os.path.exists(vf_npz):
+        dvf = np.load(vf_npz, allow_pickle=True)
+        Rf, Gf = dvf["R"], dvf["gamma_adp"]
+        m = Gf > 0
+        ax.semilogy(Rf[m] * BOHR_TO_ANGSTROM, Gf[m] * HARTREE_TO_EV * 1e3,
+                    "r^-", lw=2.0, ms=7,
+                    label="本工作 Feshbach+L²赝态 Γ(R) (独立计算)")
+        ax.axvspan(2.55, 5.29, color="0.9", zorder=0)
+        ax.annotate("参考数据未覆盖\n(经典转折点区)", xy=(3.9, 2e-2),
+                    fontsize=7.5, color="0.35")
     ax.set_xlabel("R (Angstrom)"); ax.set_ylabel(r"$\Gamma$ (meV)")
     ax.set_title("(c) 自电离宽度: MRCI 参考 vs 旧解析模型 (量级相差数个数量级)")
     ax.set_ylim(1e-6, 40); ax.set_xlim(1.5, 20)

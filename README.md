@@ -75,6 +75,29 @@ python scripts/calc_metastable_heli.py --replot book/data/he_li_metastable_pes.n
 He\*+Li 共振（Γ≈10 meV，出射电子 14.4 eV）在现有基组/活性空间下不可分辨——
 定量 Γ 需专用连续谱基组或 Feshbach 投影。
 
+## 态平均 CASSCF 激发态 (+ NEVPT2) (v0.32.0)
+
+```python
+calc = PySCFCalculator(["Li","H"], basis="6-31g", method="casscf",
+                       active_space=(2,2), nstates=2, state_average=True,
+                       state=1)                    # 第 2 个态 (自旋纯)
+E, g = calc.energy_and_gradient(coords)            # 梯度为有限差分
+calc2 = PySCFCalculator(..., pt2="nevpt2", state=1)  # 激发态 NEVPT2
+```
+
+CLI: `autoquantum scan --method casscf --active-space 2 2 --state-average
+--nstates 2 --state 1 ...` → 直接扫描**激发态势能面**。
+
+| 检验（Slurm 1559180, 514 s, exit 0, A–E 全绿） | 结果 |
+|---|---|
+| **精确性** | H₂/STO-3G 空间完备时 SA(2) = **FCI 单重态**（\|ΔE\| 8.9e-16 / 3.3e-16 Ha）✓ |
+| **态身份/平滑性** | LiH 避交叉扫描：无交叉、ΔE 极小 1.5835 eV @ 5.60 Bohr（区间内）、CI 向量最小重叠 **0.999895** ✓ |
+| 激发态 NEVPT2 | 修正为负、态序保持；对 FCI 拉近 **25.0 → 9.3 mHa**（态平均轨道代价 8–10 mHa 如实报告）✓ |
+| 一致性 | 态平均基态 = 单态 = FCI（**0.0e+00**）；FD 梯度差 1.1e-12 ✓ |
+
+⚠ 实现要点（PySCF 实测约束）：态平均必须用**自旋纯**求解器（默认会给出 ³Σu⁺
+而非第二个单重态）；NEVPT2 不接受态平均求解器 → 改用同轨道独立多根 CASCI。
+
 ## 自旋-轨道耦合: 单电子 Breit–Pauli (v0.31.0)
 
 ```python

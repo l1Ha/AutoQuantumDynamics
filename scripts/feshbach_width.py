@@ -621,8 +621,10 @@ def interp_ref(ref, r_bohr: float) -> float:
     return float(np.interp(r_ang, ref[:, 0], ref[:, 1]))
 
 
-SCAN_DEFAULT = [4.0, 4.5, 5.0, 5.29, 5.56, 6.0, 6.5, 7.0, 7.5, 8.0,
-                8.88, 9.5, 10.5, 12.0, 30.0]
+# 独立计算范围: 内侧到经典转折点以下 (~3.5 bohr), 外侧到尾部 (~20 bohr),
+# 覆盖并超过参考数据范围 (5.29–8.88 bohr); 30 bohr 仅作渐近锚
+SCAN_DEFAULT = [3.5, 4.0, 4.5, 5.0, 5.29, 5.56, 6.0, 6.25, 6.5, 7.0, 7.5,
+                8.0, 8.5, 8.88, 9.5, 10.5, 12.0, 14.0, 16.0, 20.0, 30.0]
 
 
 def scan(R_list, n_virt: int, extra_diffuse: bool, out_npz: str,

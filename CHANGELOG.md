@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.32.0 — 态平均 CASSCF 激发态 (+ 激发态 NEVPT2)
+
+### Added
+
+- **态平均 CASSCF** (`method="casscf"` + `state_average=True` + `nstates>1`):
+  `state_average_` 等权/自定义权重 (`state_weights`), `state=k` 返回第 k 个态的
+  能量 → **激发态势能面**可直接走扫描/优化/NEB/IRC 等全部工作流。
+  态平均轨道天然抑制"态身份漂移"(相对事后根跟踪启发式的标准解法)。
+- **自旋纯态平均**: 求解器装入 `fci.addons.fix_spin_` — PySCF 默认
+  `direct_spin1` 返回该 M_s 扇区**能量最低**的根而不分自旋 (实测 H₂ 的第二个
+  根是 ³Σu⁺ −0.5318 Ha 而非第二个单重态 −0.1693 Ha)。
+- **激发态 NEVPT2** (`pt2="nevpt2"` + `state=k`): 态平均情形按 PySCF 官方
+  建议改用**同一套态平均轨道上的独立多根 CASCI** —— 实测 PySCF 直接拒绝
+  state-average FCI 求解器 ("State-average FCI solver object cannot be used
+  in NEVPT2 calculation")。
+- **CI 向量根跟踪** `follow=True` (态平均 CASSCF): 按上一几何 CI 最大重叠选根。
+- CLI: `--state-average/--active-space/--pt2/--nstates/--state/--state-weights/
+  --follow` 接入 `sample/opt/scan/freq`; 5 项新 Mock 测试 (共 152 项)。
+
+### Fixed
+
+- **FD 采样污染根跟踪参考态** (既有隐患): `_energy_only` (有限差分梯度采样)
+  会更新 `_prev_exc_vec`, 使跟踪链被扰动点覆盖 → 现在 FD 期间关闭跟踪更新。
+- **隐式态平均的向后兼容风险**: `nstates` 默认值 5 是为 TD-DFT 而设; 若
+  CASSCF 隐式按它做态平均, 既有单态工作流会悄悄变成 5 态平均 → 改为
+  **显式开关** `state_average=True`, 并有测试锁定该语义。
+
+### Verified (服务器 Slurm 1559180, 514 s, exit 0, A–E 全绿)
+
+| 组 | 结果 |
+|---|---|
+| A. 精确性 (H₂/STO-3G 空间完备) | SA(2) 自旋纯 vs **FCI 单重态**: \|ΔE\| = 8.9e-16 / 3.3e-16 Ha |
+| B. 态身份/平滑性 (LiH 2.4→6.0 Bohr) | 无交叉; **避交叉在区间内** (ΔE_min 1.5835 eV @ 5.60 Bohr); CI 向量最小重叠 **0.999895**; follow 与不 follow 差 1e-14 |
+| C. 激发态 NEVPT2 (LiH) | 修正为负、态序保持; **对 FCI 拉近**: 25.04 → 9.32 mHa (R=3.0), 27.40 → 10.88 mHa (R=3.6); 如实报告态平均轨道代价 8–10 mHa |
+| D. 一致性 | 态平均基态 = 单态 = FCI (**0.0e+00 / 8.9e-16**); FD 梯度差 1.1e-12; 排斥态 dE/dR 全窗口恒负 (无态跳跃) |
+| E. API 边界 | state>0 需态平均 / 未开开关不隐式触发 / 越界 / 权重长度 — 全部明确报错 |
+
 ## 0.31.0 — 自旋-轨道耦合 (单电子 Breit–Pauli, 含两处真实根因修复)
 
 ### Added
@@ -60,8 +97,10 @@ Movre–Thiel–Meyer JCP 113, 1484 (2000); 本版按其处理路线重建第一
   - Feshbach 投影按轨道占据定义 (Q = He 1s 单占核激发流形, P = He(1s²) 背景),
     对 CASSCF 轨道旋转不敏感 (Movre–Thiel–Meyer 2000 "resonance procedure");
   - SA-CASSCF (6 活性轨道, He* 流形 6 根态平均, Newton 二阶求解) — 复现文献
-    MCSCF 步骤: **共振态阱深 D_e = 917 meV @ R_e ≈ 5.5–6.0 a₀ (文献 MRCI
+    MCSCF 步骤: **共振态阱深 D_e = 984 meV @ R_e = 5.56 a₀ (文献 MRCI
     867±20 meV @ 5.54 a₀, 实验 868(20))** — 0.20.1 中 CASCI "无阱" 的缺陷已修复;
+    独立计算范围 R ∈ [3.5, 30] a₀ (内侧到经典转折点以下, 外侧到尾部),
+    计算全程不读参考数据, 参考仅在最终对比图中出现;
   - 自定义 Slater–Condon 引擎 (自旋轨道逐步收缩, 符号约定经 He(1,1)/Li(2,1)
     对官方 direct_spin1.kernel 逐本征值验证, max|Δε| ≈ 1e-15);
   - L² 赝态连续谱 (Fock 能量窗口 [−1, 30] eV 外部轨道, 覆盖 ε_v≈14 eV,
@@ -78,12 +117,12 @@ Movre–Thiel–Meyer JCP 113, 1484 (2000); 本版按其处理路线重建第一
 
 | 指标 | 基准 | 结果 | 达标 |
 |---|---|---|---|
-| 共振态阱深 D_e (²Σ⁺ He*+Li) | 文献 MRCI 867 meV @ 5.54 a₀ | SA-CASSCF 917 meV @ ~6 a₀ (6%) | ✓ |
+| 共振态阱深 D_e (²Σ⁺ He*+Li) | 文献 MRCI 867 meV @ 5.54 a₀ | SA-CASSCF 984 meV @ 5.56 a₀ (13%) | ⚠ |
 | 离子阱谷 (R=4.5–6 bohr) | 参考样条 | CCSD(T)+CP/aVQZ MAE 0.60% | ✓ |
 | 离子尾部 (R=6–15 bohr) | 参考样条 | MAE 0.94% | ✓ |
 | 离子短程壁 (R=2.55–3.2 bohr, 新覆盖) | 参考样条 | MAE 9.6 meV (壁值 +375 meV 的 ~4%) | ✓ |
 | HeLi⁺ 阱深 | 参考 (去 BSSE) 76–78 meV | 79.1 meV @ 3.60 bohr | ⚠ 2–4% |
-| Γ(R) 第一性原理 | 参考 MRCI ~10–16 meV | L² 赝态耦合低估 ~2 个量级 | ✗ |
+| Γ(R) 第一性原理 | 参考 MRCI ~10–16 meV | L² 赝态耦合低估 ~2 量级且逐点未收敛 | ✗ |
 
 ### Known limitation (诚实记录)
 
