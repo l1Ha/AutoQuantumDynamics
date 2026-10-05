@@ -75,6 +75,25 @@ python scripts/calc_metastable_heli.py --replot book/data/he_li_metastable_pes.n
 He\*+Li 共振（Γ≈10 meV，出射电子 14.4 eV）在现有基组/活性空间下不可分辨——
 定量 Γ 需专用连续谱基组或 Feshbach 投影。
 
+## 复合方法: CBS 外推 + CCSD(T) 加和 (v0.34.0)
+
+```python
+from autoquantum.pes.composite import composite_energy, make_energy_fn
+fn  = make_energy_fn(["O","H","H"], frozen_core=True)
+out = composite_energy(fn, coords)     # E_HF/CBS + E_corr/CBS + δ_CCSD(T)
+```
+
+| 检验（Slurm 1559235, 79 s, exit 0, A–D 全绿） | 结果 |
+|---|---|
+| **公式精确重构** | 幂律 / 三点指数外推对合成序列误差 **0.00e+00 / 2.2e-16** ✓ |
+| 外推质量 (vs cc-pV5Z, H₂O) | HF \|Δ\| **9.4e-4** (QZ 2.26e-3)、相关能 **6.9e-3** (QZ 8.7e-3) → 两分量都更接近大基组 ✓ |
+| **绝对物理校验** | H₂ **R_e = 0.7414 Å（偏差 0.003%）**（归档收敛值 0.7414；单基组 CCSD(T)/TZ 0.198%）✓ |
+| 加和诚实性 | \|δ\|/\|相关\| = 0.045；对 CBS 极限偏差 −1.05 mHa（5Z 本身 +0.25 mHa，变分自洽）✓ |
+
+⚠ 诚实边界：**对已收敛体系两点外推会过冲**（H₂ 上比 5Z 更远离极限；改用
+(QZ,5Z) 输入降到 −0.90 mHa）；这是加和近似，与 G4/W1 参数化方案不同 ——
+且 G4/G3 专用基组 PySCF 未收录，无法忠实复现，故以"公式公开 + 逐项可核验"替代。
+
 ## 大活性空间: CASCI + 选择组态 CI (v0.33.0)
 
 ```python
