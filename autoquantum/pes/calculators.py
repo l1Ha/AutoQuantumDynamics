@@ -227,6 +227,10 @@ class PySCFCalculator(Calculator):
     - **高自旋约束与自旋锁定 (spin_lock)**: 开壳层自旋纯度审计, 防止态跃迁与自旋污染
     - **最大重叠法 (MOM)**: 沿几何路径保持特定电子轨道占据, 克服激发态与非平衡态变分塌陷
     - **共振态衰减宽度 (CAP-PES)**: 提供自电离衰变宽度 Γ(R) 与复能量 E_R - i*Γ/2 接口
+    - **自旋-轨道耦合 (SOC, v0.31.0)**: 单电子 Breit–Pauli 三层接口 —
+      :meth:`soc_terms` (轨道层 ζ/精细结构分裂) 与
+      :meth:`soc_state_interaction` (单重态-三重态耦合矩阵, cm⁻¹);
+      见 ``autoquantum.pes.soc`` (含逐元素误差的诚实边界)
     """
 
     name = "pyscf"
@@ -887,6 +891,54 @@ class PySCFCalculator(Calculator):
         e = self.energy(coords)
         gamma = self.resonance_width(coords)
         return complex(e, -0.5 * gamma)
+
+    def soc_terms(self, coords: np.ndarray,
+                  orbitals: Optional[Sequence[int]] = None,
+                  z_eff: Optional[Dict[str, float]] = None,
+                  term: Optional[str] = None) -> Dict[str, Any]:
+        """单电子 Breit–Pauli **轨道层** SOC 分析 (cm⁻¹)。
+
+        用当前 ``method`` 的 SCF 轨道 (RHF/ROHF); 开壳层 p/π 壳层可自动识别
+        (显式 ``orbitals`` 优先)。返回 ``{"zeta_cm", "splitting_cm",
+        "orbitals", "term", "h_mo", "provenance"}``:
+          - 原子 ²P: 分裂 = (3/2)ζ;  - 线性分子 ²Π: 分裂 = |ζ| (A 常数)。
+        ⚠ 仅单电子项 (无二电子 SOC); 验证脚本给出逐元素实测比值。
+        """
+        from autoquantum.pes import soc as _soc
+        coords_arr = np.asarray(coords, dtype=float)
+        mol = self._mol(coords_arr)
+        mf = self._mf(mol)
+        mf.kernel()
+        if not mf.converged:
+            raise CommandBackendError("PySCF SCF 未收敛")
+        out = _soc.soc_orbital_analysis(mol, mf, orbitals=orbitals,
+                                        z_eff=z_eff, term=term)
+        out["provenance"] = self.provenance
+        return out
+
+    def soc_state_interaction(self, coords: np.ndarray,
+                              active_orbitals: Sequence[int],
+                              singlet_roots: int = 1, triplet_roots: int = 1,
+                              z_eff: Optional[Dict[str, float]] = None,
+                              nelecas: Optional[int] = None) -> Dict[str, Any]:
+        """**态相互作用** SOC 矩阵 (cm⁻¹): 单重态-三重态耦合。
+
+        共同轨道基 = 当前 method 的 SCF 轨道; ``active_orbitals`` 给出活性空间
+        (经 ``mcscf.sort_mo`` 就位), 三重态含 M=+1/0/−1 三分量。
+        返回 ``{"energies_cm", "soc_cm", "labels", "nelecas", "provenance"}``。
+        """
+        from autoquantum.pes import soc as _soc
+        coords_arr = np.asarray(coords, dtype=float)
+        mol = self._mol(coords_arr)
+        mf = self._mf(mol)
+        mf.kernel()
+        if not mf.converged:
+            raise CommandBackendError("PySCF SCF 未收敛")
+        out = _soc.soc_state_interaction(
+            mol, mf, active_orbitals, singlet_roots=singlet_roots,
+            triplet_roots=triplet_roots, z_eff=z_eff, nelecas=nelecas)
+        out["provenance"] = self.provenance
+        return out
 
     @property
     def provenance(self) -> Dict[str, str]:

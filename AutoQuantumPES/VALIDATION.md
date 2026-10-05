@@ -22,6 +22,8 @@
 
 ## 自旋-轨道耦合 (SOC) 验证状态
 
+日志归档: `validation/cluster_soc_validation_1558957.log`（Slurm 1558957, xc003, 17 s,
+**存在失败项** —— 失败组与原因逐条列在下方, 不做选择性呈现）。
 `scripts/validate_soc.py`（主仓库中的同一脚本）逐组判据与**当前**实测状态：
 
 | 组 | 判据 | 状态 |

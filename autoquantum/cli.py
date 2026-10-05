@@ -142,6 +142,28 @@ def main():
                                help="启用最大重叠法 (MOM) 沿采样序列跟踪特定激发/占据态 (pyscf)")
     _add_solvent_args(sample_parser)
 
+    soc_parser = sub.add_parser(
+        "soc", help="自旋-轨道耦合 (单电子 Breit-Pauli): ζ / 精细结构 / 单-三态耦合")
+    soc_parser.add_argument("--input", required=True, help="几何 XYZ 文件 (Bohr)")
+    soc_parser.add_argument("--basis", default="cc-pvdz")
+    soc_parser.add_argument("--charge", type=int, default=0)
+    soc_parser.add_argument("--spin", type=int, default=0, help="2S = Na - Nb")
+    soc_parser.add_argument("--method", default="rohf",
+                            help="SCF 方法 (rhf/rohf/uhf/rks/roks/uks)")
+    soc_parser.add_argument("--xc", default=None, help="DFT 泛函")
+    soc_parser.add_argument("--orbitals", type=int, nargs="+", default=None,
+                            help="p/π 壳层轨道索引 (默认自动识别)")
+    soc_parser.add_argument("--term", default="auto", choices=["auto", "P", "Pi"],
+                            help="项类型: 原子 ²P (分裂 3ζ/2) 或 ²Π (分裂 |ζ|)")
+    soc_parser.add_argument("--z-eff", nargs="+", default=None,
+                            help="有效核电荷 元素=Z (经验屏蔽修正), 如 F=5.55")
+    soc_parser.add_argument("--active-orbitals", type=int, nargs="+", default=None,
+                            help="态相互作用模式: 活性空间轨道索引")
+    soc_parser.add_argument("--singlet-roots", type=int, default=1)
+    soc_parser.add_argument("--triplet-roots", type=int, default=1)
+    soc_parser.add_argument("--nelecas", type=int, default=None,
+                            help="活性空间电子数 (默认由占据推断)")
+
     fit_parser = sub.add_parser(
         "fit", help="在数据集 (npz) 上训练 NN 势能代理面")
     fit_parser.add_argument("--data", required=True, help="数据集 (.npz)")
@@ -207,6 +229,8 @@ def main():
         return _fit_nn(args)
     elif args.command == "backends":
         return _show_backends()
+    elif args.command == "soc":
+        return _cmd_soc(args)
     elif args.command == "opt":
         return _cmd_opt(args)
     elif args.command == "scan":
@@ -434,6 +458,50 @@ def _sample_data(args):
     data.save_npz(args.output)
     print(f"已保存 {data.n_points} 个构型 → {args.output}")
     print(f"能量范围: [{data.energies.min():.6f}, {data.energies.max():.6f}] Hartree")
+    return 0
+
+
+def _cmd_soc(args):
+    """自旋-轨道耦合: 轨道层 ζ/分裂 或 态相互作用 SOC 矩阵。"""
+    from autoquantum.pes.calculators import make_calculator
+
+    symbols, coords = _read_xyz(args.input)
+    z_eff = None
+    if args.z_eff:
+        z_eff = {}
+        for item in args.z_eff:
+            if "=" not in item:
+                print(f"--z-eff 需要 元素=Z 形式, 得到 {item!r}")
+                return 2
+            k, v = item.split("=", 1)
+            z_eff[k.strip()] = float(v)
+    calc = make_calculator("pyscf", symbols=symbols, basis=args.basis,
+                           charge=args.charge, spin=args.spin,
+                           method=args.method, xc=args.xc)
+    print(f"体系: {len(symbols)} 原子 ({' '.join(symbols)}) | "
+          f"{calc.provenance['method']}/{calc.provenance['basis']} | "
+          f"spin={args.spin}")
+    if args.active_orbitals:
+        out = calc.soc_state_interaction(
+            coords, args.active_orbitals, singlet_roots=args.singlet_roots,
+            triplet_roots=args.triplet_roots, z_eff=z_eff, nelecas=args.nelecas)
+        e = out["energies_cm"]
+        H = out["soc_cm"]
+        print(f"活性空间: 轨道 {args.active_orbitals}, nelecas = {out['nelecas']}")
+        print("态能量 (cm⁻¹, 相对最低): " + " | ".join(
+            f"{lbl} {ev:.1f}" for lbl, ev in zip(out["labels"], e)))
+        print("SOC 矩阵 |H_SO| (cm⁻¹):")
+        for i, lbl in enumerate(out["labels"]):
+            print("  " + lbl.ljust(12) + " ".join(
+                f"{abs(H[i, j]):9.3f}" for j in range(len(out["labels"]))))
+        return 0
+    out = calc.soc_terms(coords, orbitals=args.orbitals, z_eff=z_eff,
+                         term=args.term)
+    print(f"p/π 壳层轨道: {out['orbitals']} | 项类型: {out['term']}")
+    print(f"ζ = {out['zeta_cm']:.3f} cm⁻¹ → 精细结构分裂 = "
+          f"{out['splitting_cm']:.3f} cm⁻¹")
+    print("(单电子 Breit–Pauli; 二电子 SOC 未含 → 轻元素系统性偏大, "
+          "重元素更接近实验; 可用 --z-eff 做经验屏蔽修正)")
     return 0
 
 
