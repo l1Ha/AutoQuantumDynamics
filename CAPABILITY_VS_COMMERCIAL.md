@@ -19,6 +19,9 @@
   PES 生成与拟合, AutoQuantum 现在可以独立完成 (并在自动化/ML 拟合/动力学
   衔接上优于二者); 对多参考/激发态/重元素/溶剂等场景, 仍必须使用商业软件。
 
+> 📦 本矩阵覆盖的**势能面计算与拟合**子系统已拆分为独立仓库:
+> [AutoQuantumPES](https://github.com/l1Ha/AutoQuantumPES) (`aqpes` 包)。
+
 ## 2. 能力矩阵 (v0.30.0)
 
 | 能力 | Molpro | Gaussian | AutoQuantum | 证据 / 说明 |

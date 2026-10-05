@@ -5,6 +5,11 @@
 > ⚠️ 这是研究/教学原型，不是经过认证的科学计算软件。定量使用前请阅读
 > [功能边界与已知限制](#功能边界与已知限制) 与 [RELEASE_VALIDATION.md](RELEASE_VALIDATION.md)。
 
+> 📦 **相关独立项目**: 势能面计算与拟合子系统已拆分为独立仓库
+> **[AutoQuantumPES](https://github.com/l1Ha/AutoQuantumPES)** (`aqpes` 包,
+> 含 CLI 与独立测试)。本仓库的 ``autoquantum`` 包**保持原有全部功能不变**,
+> 两者共享同一套 PES 内核代码。
+
 ## 亚稳态体系与高级电子结构计算 (v0.20.0)
 
 针对如 $\text{He}^* + \text{Li}$ 等处于电离连续谱中的亚稳态碰撞体系，`PySCFCalculator` 提供了高自旋约束与轨道锁定机制：
